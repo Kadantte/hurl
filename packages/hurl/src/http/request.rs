@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,29 +17,32 @@
  */
 use std::fmt;
 
-use url::Url;
-
-use crate::http::core::*;
 use crate::http::header::{HeaderVec, COOKIE};
-use crate::http::HttpError;
+use crate::http::url::Url;
+use crate::http::RequestCookie;
 
 /// Represents a runtime HTTP request.
 /// This is a real request, that has been executed by our HTTP client.
-/// It's different from [`crate::http::RequestSpec`] which is the request asked to be executed by our user.
-/// For instance, in the request spec, headers implicitly added by curl are not present, while
+/// It's different from `crate::http::RequestSpec` which is the request asked to be executed by our
+/// user. For instance, in the request spec, headers implicitly added by curl are not present, while
 /// they will be present in the [`Request`] instances.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
-    pub url: String,
+    /// Absolute URL.
+    pub url: Url,
+    /// Method.
     pub method: String,
+    /// List of HTTP headers.
     pub headers: HeaderVec,
+    /// Response body bytes.
     pub body: Vec<u8>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum RequestedHttpVersion {
+    /// The effective HTTP version will be chosen by libcurl
     #[default]
-    Default, // The effective HTTP version will be chosen by libcurl
+    Default,
     Http10,
     Http11,
     Http2,
@@ -61,35 +64,22 @@ impl fmt::Display for RequestedHttpVersion {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum IpResolve {
+    /// Default, can use addresses of all IP versions that your system allows.
     #[default]
-    Default, // Default, can use addresses of all IP versions that your system allows.
+    Default,
     IpV4,
     IpV6,
 }
 
 impl Request {
     /// Creates a new request.
-    pub fn new(method: &str, url: &str, headers: HeaderVec, body: Vec<u8>) -> Self {
+    pub fn new(method: &str, url: Url, headers: HeaderVec, body: Vec<u8>) -> Self {
         Request {
-            url: url.to_string(),
+            url,
             method: method.to_string(),
             headers,
             body,
         }
-    }
-
-    /// Extracts query string params from the url of the request.
-    pub fn query_string_params(&self) -> Vec<Param> {
-        let u = Url::parse(self.url.as_str()).expect("valid url");
-        let mut params = vec![];
-        for (name, value) in u.query_pairs() {
-            let param = Param {
-                name: name.to_string(),
-                value: value.to_string(),
-            };
-            params.push(param);
-        }
-        params
     }
 
     /// Returns a list of request headers cookie.
@@ -101,28 +91,6 @@ impl Request {
             .iter()
             .flat_map(|h| parse_cookies(h.value.as_str().trim()))
             .collect()
-    }
-
-    /// Returns the base url http(s)://host(:port)
-    pub fn base_url(&self) -> Result<String, HttpError> {
-        // FIXME: is it possible to do it with libcurl?
-        let url = match Url::parse(&self.url) {
-            Ok(url) => url,
-            Err(_) => return Err(HttpError::InvalidUrl(self.url.clone())),
-        };
-        let scheme = url.scheme();
-        if scheme != "http" && scheme != "https" {
-            return Err(HttpError::InvalidUrlPrefix(self.url.clone()));
-        }
-        let host = match url.host() {
-            Some(host) => host,
-            None => return Err(HttpError::InvalidUrl(self.url.clone())),
-        };
-        let port = match url.port() {
-            Some(port) => format!(":{port}"),
-            None => String::new(),
-        };
-        Ok(format!("{scheme}://{host}{port}"))
     }
 }
 
@@ -154,44 +122,22 @@ mod tests {
         headers.push(Header::new("Accept", "*/*"));
         headers.push(Header::new("User-Agent", "hurl/1.0"));
         headers.push(Header::new("content-type", "application/json"));
+        let url = "http://localhost:8000/hello".parse().unwrap();
 
-        Request::new("GET", "http://localhost:8000/hello", headers, vec![])
+        Request::new("GET", url, headers, vec![])
     }
 
     fn query_string_request() -> Request {
-        Request::new("GET", "http://localhost:8000/querystring-params?param1=value1&param2=&param3=a%3Db&param4=1%2C2%2C3", HeaderVec::new(), vec![])
+        let url = "http://localhost:8000/querystring-params?param1=value1&param2=&param3=a%3Db&param4=1%2C2%2C3".parse().unwrap();
+
+        Request::new("GET", url, HeaderVec::new(), vec![])
     }
 
     fn cookies_request() -> Request {
         let mut headers = HeaderVec::new();
         headers.push(Header::new("Cookie", "cookie1=value1; cookie2=value2"));
-        Request::new("GET", "http://localhost:8000/cookies", headers, vec![])
-    }
-
-    #[test]
-    fn test_query_string() {
-        assert!(hello_request().query_string_params().is_empty());
-        assert_eq!(
-            query_string_request().query_string_params(),
-            vec![
-                Param {
-                    name: "param1".to_string(),
-                    value: "value1".to_string(),
-                },
-                Param {
-                    name: "param2".to_string(),
-                    value: String::new(),
-                },
-                Param {
-                    name: "param3".to_string(),
-                    value: "a=b".to_string(),
-                },
-                Param {
-                    name: "param4".to_string(),
-                    value: "1,2,3".to_string(),
-                },
-            ]
-        )
+        let url = "http://localhost:8000/cookies".parse().unwrap();
+        Request::new("GET", url, headers, vec![])
     }
 
     #[test]
@@ -219,7 +165,7 @@ mod tests {
                     value: "value2".to_string(),
                 },
             ]
-        )
+        );
     }
 
     #[test]
@@ -236,7 +182,7 @@ mod tests {
                     value: "value2".to_string(),
                 },
             ]
-        )
+        );
     }
 
     #[test]
@@ -247,33 +193,6 @@ mod tests {
                 name: "cookie1".to_string(),
                 value: "value1".to_string(),
             },
-        )
-    }
-
-    #[test]
-    fn test_base_url() {
-        assert_eq!(
-            Request::new("", "http://localhost", HeaderVec::new(), vec![])
-                .base_url()
-                .unwrap(),
-            "http://localhost".to_string()
-        );
-        assert_eq!(
-            Request::new(
-                "",
-                "http://localhost:8000/redirect-relative",
-                HeaderVec::new(),
-                vec![]
-            )
-            .base_url()
-            .unwrap(),
-            "http://localhost:8000".to_string()
-        );
-        assert_eq!(
-            Request::new("", "https://localhost:8000", HeaderVec::new(), vec![])
-                .base_url()
-                .unwrap(),
-            "https://localhost:8000".to_string()
         );
     }
 }

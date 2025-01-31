@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@ use crate::report::html::timeline::util::{
 };
 use crate::report::html::timeline::{svg, CallContext, CallContextKind, CALL_HEIGHT, CALL_INSET};
 use crate::report::html::Testcase;
+use crate::util::redacted::Redact;
 
 /// Returns the start and end date for these entries.
 fn get_times_interval(calls: &[&Call]) -> Option<Interval<DateTime<Utc>>> {
@@ -52,7 +53,12 @@ fn get_times_interval(calls: &[&Call]) -> Option<Interval<DateTime<Utc>>> {
 
 impl Testcase {
     /// Returns the SVG string of this list of `calls`.
-    pub fn get_waterfall_svg(&self, calls: &[&Call], call_ctxs: &[CallContext]) -> String {
+    pub fn get_waterfall_svg(
+        &self,
+        calls: &[&Call],
+        call_ctxs: &[CallContext],
+        secrets: &[&str],
+    ) -> String {
         // Compute our scale (transform 0 based microsecond to 0 based pixels):
         let times = get_times_interval(calls);
         let times = match times {
@@ -100,8 +106,9 @@ impl Testcase {
         );
         root.add_child(grid);
 
-        let elts = zip(calls, call_ctxs)
-            .map(|(call, call_ctx)| new_call(call, call_ctx, times, scale_x, pixels_x, pixels_y));
+        let elts = zip(calls, call_ctxs).map(|(call, call_ctx)| {
+            new_call(call, call_ctx, times, scale_x, pixels_x, pixels_y, secrets)
+        });
 
         // We construct SVG calls from last to first so the detail of any call is not overridden
         // by the next call.
@@ -175,7 +182,7 @@ fn new_vert_lines(
             return;
         }
         let elt = svg::new_line(*x, 0.0, *x, pixels_y.end.0);
-        lines.add_child(elt)
+        lines.add_child(elt);
     });
     group.add_child(lines);
 
@@ -203,13 +210,14 @@ fn new_call(
     scale_x: Scale,
     pixels_x: Interval<Pixel>,
     pixels_y: Interval<Pixel>,
+    secrets: &[&str],
 ) -> Element {
     let mut call_elt = svg::new_group();
 
     let summary = new_call_timings(call, call_ctx, times, scale_x, pixels_y);
     call_elt.add_child(summary);
 
-    let detail = new_call_tooltip(call, call_ctx, times, scale_x, pixels_x, pixels_y);
+    let detail = new_call_tooltip(call, call_ctx, times, scale_x, pixels_x, pixels_y, secrets);
     call_elt.add_child(detail);
 
     call_elt
@@ -231,7 +239,9 @@ fn new_call_timings(
     let height = CALL_HEIGHT - CALL_INSET * 2;
 
     // DNS
-    let dns_x = (call.timings.begin_call - times.start).to_std().unwrap();
+    let dns_x = (call.timings.begin_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     let dns_x = to_pixel(dns_x, scale_x);
     let dns_width = to_pixel(call.timings.name_lookup, scale_x);
     if dns_width.0 > 0.0 {
@@ -304,6 +314,7 @@ fn new_call_tooltip(
     scale_x: Scale,
     pixels_x: Interval<Pixel>,
     pixels_y: Interval<Pixel>,
+    secrets: &[&str],
 ) -> Element {
     let mut group = svg::new_group();
     group.add_attr(Class("call-detail".to_string()));
@@ -312,7 +323,9 @@ fn new_call_tooltip(
 
     let width = 600.px();
     let height = 235.px();
-    let offset_x = (call.timings.begin_call - times.start).to_std().unwrap();
+    let offset_x = (call.timings.begin_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     let offset_x = to_pixel(offset_x, scale_x);
     let offset_y = CALL_HEIGHT * (call_ctx.call_index - 1) + pixels_y.start;
     let offset_y = offset_y + CALL_HEIGHT - CALL_INSET;
@@ -356,7 +369,8 @@ fn new_call_tooltip(
     elt.add_attr(Height("20".to_string()));
     legend.add_child(elt);
 
-    let text = format!("{} {}", call.request.method, call.request.url);
+    let url = call.request.url.to_string().redact(secrets);
+    let text = format!("{} {}", call.request.method, url);
     let text = trunc_str(&text, 54);
     let text = format!("{text}  {}", call.response.status);
     let mut elt = svg::new_text(x.0 + 30.0, y.0 + 16.0, &text);
@@ -424,8 +438,12 @@ fn new_call_tooltip(
     y += delta_y;
 
     // Start and stop timestamps
-    let start = (call.timings.begin_call - times.start).to_std().unwrap();
-    let end = (call.timings.end_call - times.start).to_std().unwrap();
+    let start = (call.timings.begin_call - times.start)
+        .to_std()
+        .unwrap_or_default();
+    let end = (call.timings.end_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     x = offset_x + 380.px();
     y = offset_y + 64.px();
     let value = Microsecond(start.as_micros() as f64);
@@ -489,9 +507,13 @@ fn new_call_sel(
     scale_x: Scale,
     pixels_y: Interval<Pixel>,
 ) -> Element {
-    let offset_x_start = (call.timings.begin_call - times.start).to_std().unwrap();
+    let offset_x_start = (call.timings.begin_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     let offset_x_start = to_pixel(offset_x_start, scale_x);
-    let offset_x_end = (call.timings.end_call - times.start).to_std().unwrap();
+    let offset_x_end = (call.timings.end_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     let offset_x_end = to_pixel(offset_x_end, scale_x);
     let color = match call_ctx.kind {
         CallContextKind::Success | CallContextKind::Retry => "green",
@@ -626,7 +648,7 @@ mod tests {
     #[test]
     fn grid_vert_lines_svg() {
         let start = Utc.with_ymd_and_hms(2022, 1, 1, 8, 0, 0).unwrap();
-        let end = start + Duration::seconds(1);
+        let end = start + Duration::try_seconds(1).unwrap();
         let times = Interval { start, end };
         let start = 0.px();
         let end = 1000.px();

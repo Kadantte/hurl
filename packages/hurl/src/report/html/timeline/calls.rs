@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,10 +28,16 @@ use crate::report::html::timeline::util::{
 };
 use crate::report::html::timeline::{svg, CallContext, CallContextKind, CALL_HEIGHT};
 use crate::report::html::Testcase;
+use crate::util::redacted::Redact;
 
 impl Testcase {
     /// Returns a SVG view of `calls` list using contexts `call_ctxs`.
-    pub fn get_calls_svg(&self, calls: &[&Call], call_ctxs: &[CallContext]) -> String {
+    pub fn get_calls_svg(
+        &self,
+        calls: &[&Call],
+        call_ctxs: &[CallContext],
+        secrets: &[&str],
+    ) -> String {
         let margin_top = 50.px();
         let margin_bottom = 250.px();
 
@@ -74,7 +80,7 @@ impl Testcase {
             root.add_child(elt);
 
             // Add calls info
-            let elt = new_calls(calls, call_ctxs, x, y);
+            let elt = new_calls(calls, call_ctxs, x, y, secrets);
             root.add_child(elt);
         }
 
@@ -91,6 +97,7 @@ fn new_calls(
     call_ctxs: &[CallContext],
     offset_x: Pixel,
     offset_y: Pixel,
+    secrets: &[&str],
 ) -> Element {
     let mut group = svg::new_group();
     group.add_attr(Class("calls-list".to_string()));
@@ -123,7 +130,7 @@ fn new_calls(
             x += 12.px();
 
             // URL
-            let url = &call.request.url;
+            let url = &call.request.url.to_string().redact(secrets);
             let url = url.strip_prefix("http://").unwrap_or(url);
             let url = url.strip_prefix("https://").unwrap_or(url);
             let text = format!("{} {url}", call.request.method);

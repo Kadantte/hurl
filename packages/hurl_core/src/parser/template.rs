@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,21 +15,15 @@
  * limitations under the License.
  *
  */
-use crate::ast::{Expr, Pos, SourceInfo, TemplateElement};
-use crate::parser::primitives::{literal, try_literal};
-use crate::parser::reader::*;
+use crate::ast::{Placeholder, SourceInfo, TemplateElement};
+use crate::parser::primitives::zero_or_more_spaces;
 use crate::parser::{error, expr, ParseResult};
+use crate::reader::{Pos, Reader};
+use crate::typing::SourceString;
 
 pub struct EncodedString {
     pub source_info: SourceInfo,
     pub chars: Vec<(char, String, Pos)>,
-}
-
-pub fn template(reader: &mut Reader) -> ParseResult<Expr> {
-    try_literal("{{", reader)?;
-    let expression = expr::parse2(reader)?;
-    literal("}}", reader)?;
-    Ok(expression)
 }
 
 pub fn templatize(encoded_string: EncodedString) -> ParseResult<Vec<TemplateElement>> {
@@ -43,7 +37,7 @@ pub fn templatize(encoded_string: EncodedString) -> ParseResult<Vec<TemplateElem
     let mut elements = vec![];
 
     let mut value = String::new();
-    let mut encoded = String::new();
+    let mut source = SourceString::new();
     let mut state = State::String;
     let mut expression_start = None;
 
@@ -54,24 +48,24 @@ pub fn templatize(encoded_string: EncodedString) -> ParseResult<Vec<TemplateElem
                     state = State::FirstOpenBracket;
                 } else {
                     value.push(c);
-                    encoded.push_str(&s.clone());
+                    source.push_str(&s);
                 }
             }
 
             State::FirstOpenBracket => {
                 if s.as_str() == "{" {
                     if !value.is_empty() {
-                        elements.push(TemplateElement::String { value, encoded });
+                        elements.push(TemplateElement::String { value, source });
                         value = String::new();
-                        encoded = String::new();
+                        source = SourceString::new();
                     }
                     state = State::Template;
                 } else {
                     value.push('{');
-                    encoded.push('{');
+                    source.push('{');
 
                     value.push(c);
-                    encoded.push_str(&s.clone());
+                    source.push_str(&s);
                     state = State::String;
                 }
             }
@@ -84,28 +78,31 @@ pub fn templatize(encoded_string: EncodedString) -> ParseResult<Vec<TemplateElem
                     state = State::FirstCloseBracket;
                 } else {
                     value.push(c);
-                    encoded.push_str(&s.clone());
+                    source.push_str(&s);
                 }
             }
 
             State::FirstCloseBracket => {
                 if s.as_str() == "}" {
-                    let mut reader = Reader::new(encoded.as_str());
-                    reader.state = ReaderState {
-                        cursor: 0,
-                        pos: expression_start.unwrap(),
+                    let mut reader = Reader::with_pos(source.as_str(), expression_start.unwrap());
+                    let space0 = zero_or_more_spaces(&mut reader)?;
+                    let expr = expr::parse(&mut reader)?;
+                    let space1 = zero_or_more_spaces(&mut reader)?;
+                    let placeholder = Placeholder {
+                        space0,
+                        expr,
+                        space1,
                     };
-                    let expression = expr::parse2(&mut reader)?;
-                    elements.push(TemplateElement::Expression(expression));
+                    elements.push(TemplateElement::Placeholder(placeholder));
                     value = String::new();
-                    encoded = String::new();
+                    source = SourceString::new();
                     expression_start = None;
                     state = State::String;
                 } else {
                     value.push('}');
                     value.push(c);
-                    encoded.push('}');
-                    encoded.push_str(&s.clone());
+                    source.push('}');
+                    source.push_str(&s);
                 }
             }
         }
@@ -115,30 +112,32 @@ pub fn templatize(encoded_string: EncodedString) -> ParseResult<Vec<TemplateElem
         State::String => {}
         State::FirstOpenBracket => {
             value.push('{');
-            encoded.push('{');
+            source.push('{');
         }
         State::Template | State::FirstCloseBracket => {
-            let inner = error::ParseError::Expecting {
+            let kind = error::ParseErrorKind::Expecting {
                 value: "}}".to_string(),
             };
-            return Err(error::Error::new(
+            return Err(error::ParseError::new(
                 encoded_string.source_info.end,
                 false,
-                inner,
+                kind,
             ));
         }
     }
 
     if !value.is_empty() {
-        elements.push(TemplateElement::String { value, encoded })
+        elements.push(TemplateElement::String { value, source });
     }
     Ok(elements)
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
-    use crate::ast::{Expr, Variable, Whitespace};
+    use crate::ast::{Expr, ExprKind, Placeholder, Variable, Whitespace};
+    use crate::typing::ToSource;
 
     #[test]
     fn test_templatize_empty_string() {
@@ -230,15 +229,18 @@ mod tests {
             vec![
                 TemplateElement::String {
                     value: "Hi ".to_string(),
-                    encoded: "Hi\\u0020".to_string(),
+                    source: "Hi\\u0020".to_source(),
                 },
-                TemplateElement::Expression(Expr {
+                TemplateElement::Placeholder(Placeholder {
                     space0: Whitespace {
                         value: String::new(),
                         source_info: SourceInfo::new(Pos::new(1, 11), Pos::new(1, 11)),
                     },
-                    variable: Variable {
-                        name: "name".to_string(),
+                    expr: Expr {
+                        kind: ExprKind::Variable(Variable {
+                            name: "name".to_string(),
+                            source_info: SourceInfo::new(Pos::new(1, 11), Pos::new(1, 15)),
+                        }),
                         source_info: SourceInfo::new(Pos::new(1, 11), Pos::new(1, 15)),
                     },
                     space1: Whitespace {
@@ -248,7 +250,7 @@ mod tests {
                 }),
                 TemplateElement::String {
                     value: "!".to_string(),
-                    encoded: "!".to_string(),
+                    source: "!".to_source(),
                 },
             ]
         );
@@ -269,14 +271,17 @@ mod tests {
         };
         assert_eq!(
             templatize(encoded_string).unwrap(),
-            vec![TemplateElement::Expression(Expr {
+            vec![TemplateElement::Placeholder(Placeholder {
                 space0: Whitespace {
                     value: String::new(),
                     source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 3)),
                 },
-                variable: Variable {
-                    name: "x".to_string(),
-                    source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 4)),
+                expr: Expr {
+                    kind: ExprKind::Variable(Variable {
+                        name: "x".to_string(),
+                        source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 4)),
+                    }),
+                    source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 4))
                 },
                 space1: Whitespace {
                     value: String::new(),
@@ -301,8 +306,8 @@ mod tests {
         let error = templatize(encoded_string).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 4 });
         assert_eq!(
-            error.inner,
-            error::ParseError::Expecting {
+            error.kind,
+            error::ParseErrorKind::Expecting {
                 value: "}}".to_string()
             }
         );
@@ -316,15 +321,15 @@ mod tests {
         let encoded_string = EncodedString {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 4)),
             chars: vec![
-                ('{', "\\{".to_string(), Pos { line: 1, column: 1 }),
-                ('{', "\\{".to_string(), Pos { line: 1, column: 2 }),
+                ('{', "\\{".to_string(), Pos::new(1, 1)),
+                ('{', "\\{".to_string(), Pos::new(1, 2)),
             ],
         };
         assert_eq!(
             templatize(encoded_string).unwrap(),
             vec![TemplateElement::String {
                 value: "{{".to_string(),
-                encoded: "\\{\\{".to_string(),
+                source: "\\{\\{".to_source(),
             },]
         );
     }

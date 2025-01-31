@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,33 +15,33 @@
  * limitations under the License.
  *
  */
-use crate::ast::*;
-use crate::parser::error::*;
-use crate::parser::primitives::*;
-use crate::parser::reader::Reader;
-use crate::parser::template::template;
-use crate::parser::{string, ParseResult};
+use super::placeholder;
+use crate::ast::{SourceInfo, Template, TemplateElement};
+use crate::parser::primitives::try_literal;
+use crate::parser::{string, ParseError, ParseErrorKind, ParseResult};
+use crate::reader::Reader;
+use crate::typing::ToSource;
 
+/// Parses a string into a [key string](https://hurl.dev/docs/grammar.html#key-string).
 pub fn parse(reader: &mut Reader) -> ParseResult<Template> {
-    let start = reader.state;
-
+    let start = reader.cursor();
     let mut elements = vec![];
     loop {
-        match template(reader) {
-            Ok(expr) => {
-                let element = TemplateElement::Expression(expr);
+        let save_state = reader.cursor();
+        match placeholder::parse(reader) {
+            Ok(placeholder) => {
+                let element = TemplateElement::Placeholder(placeholder);
                 elements.push(element);
             }
             Err(e) => {
                 if e.recoverable {
+                    reader.seek(save_state);
                     let value = key_string_content(reader)?;
                     if value.is_empty() {
                         break;
                     }
-                    let encoded: String = reader.buffer[start.cursor..reader.state.cursor]
-                        .iter()
-                        .collect();
-                    let element = TemplateElement::String { value, encoded };
+                    let source = reader.read_from(start.index).to_source();
+                    let element = TemplateElement::String { value, source };
                     elements.push(element);
                 } else {
                     return Err(e);
@@ -50,28 +50,25 @@ pub fn parse(reader: &mut Reader) -> ParseResult<Template> {
         }
     }
     if elements.is_empty() {
-        let inner = ParseError::Expecting {
+        let kind = ParseErrorKind::Expecting {
             value: "key-string".to_string(),
         };
-        return Err(Error::new(start.pos, false, inner));
+        return Err(ParseError::new(start.pos, false, kind));
     }
-    if let Some(TemplateElement::String { encoded, .. }) = elements.first() {
-        if encoded.starts_with('[') {
-            let inner = ParseError::Expecting {
+    if let Some(TemplateElement::String { source, .. }) = elements.first() {
+        if source.starts_with('[') {
+            let kind = ParseErrorKind::Expecting {
                 value: "key-string".to_string(),
             };
-            return Err(Error::new(start.pos, false, inner));
+            return Err(ParseError::new(start.pos, false, kind));
         }
     }
 
-    let end = reader.state;
+    let end = reader.cursor();
     Ok(Template {
         delimiter: None,
         elements,
-        source_info: SourceInfo {
-            start: start.pos,
-            end: end.pos,
-        },
+        source_info: SourceInfo::new(start.pos, end.pos),
     })
 }
 
@@ -102,7 +99,7 @@ fn key_string_content(reader: &mut Reader) -> ParseResult<String> {
 fn key_string_text(reader: &mut Reader) -> String {
     let mut s = String::new();
     loop {
-        let save = reader.state;
+        let save = reader.cursor();
         match reader.read() {
             None => break,
             Some(c) => {
@@ -117,7 +114,7 @@ fn key_string_text(reader: &mut Reader) -> String {
                 {
                     s.push(c);
                 } else {
-                    reader.state = save;
+                    reader.seek(save);
                     break;
                 }
             }
@@ -129,7 +126,7 @@ fn key_string_text(reader: &mut Reader) -> String {
 
 fn key_string_escaped_char(reader: &mut Reader) -> ParseResult<char> {
     try_literal("\\", reader)?;
-    let start = reader.state;
+    let start = reader.cursor();
     match reader.read() {
         Some('#') => Ok('#'),
         Some(':') => Ok(':'),
@@ -141,14 +138,18 @@ fn key_string_escaped_char(reader: &mut Reader) -> ParseResult<char> {
         Some('r') => Ok('\r'),
         Some('t') => Ok('\t'),
         Some('u') => string::unicode(reader),
-        _ => Err(Error::new(start.pos, false, ParseError::EscapeChar)),
+        _ => Err(ParseError::new(
+            start.pos,
+            false,
+            ParseErrorKind::EscapeChar,
+        )),
     }
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use crate::reader::Pos;
 
     #[test]
     fn test_key_string() {
@@ -159,12 +160,12 @@ mod tests {
                 delimiter: None,
                 elements: vec![TemplateElement::String {
                     value: "aaa:".to_string(),
-                    encoded: "aaa\\:".to_string(),
+                    source: "aaa\\:".to_source(),
                 }],
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 6)),
             }
         );
-        assert_eq!(reader.state.cursor, 5);
+        assert_eq!(reader.cursor().index, 5);
 
         let mut reader = Reader::new("$top:");
         assert_eq!(
@@ -173,12 +174,12 @@ mod tests {
                 delimiter: None,
                 elements: vec![TemplateElement::String {
                     value: "$top".to_string(),
-                    encoded: "$top".to_string(),
+                    source: "$top".to_source(),
                 }],
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 5)),
             }
         );
-        assert_eq!(reader.state.cursor, 4);
+        assert_eq!(reader.cursor().index, 4);
 
         let mut reader = Reader::new("key\\u{20}\\u{3a} :");
         assert_eq!(
@@ -187,12 +188,12 @@ mod tests {
                 delimiter: None,
                 elements: vec![TemplateElement::String {
                     value: "key :".to_string(),
-                    encoded: "key\\u{20}\\u{3a}".to_string(),
+                    source: "key\\u{20}\\u{3a}".to_source(),
                 }],
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 16)),
             }
         );
-        assert_eq!(reader.state.cursor, 15);
+        assert_eq!(reader.cursor().index, 15);
 
         let mut reader = Reader::new("values\\u{5b}0\\u{5d} :");
         assert_eq!(
@@ -201,12 +202,12 @@ mod tests {
                 delimiter: None,
                 elements: vec![TemplateElement::String {
                     value: "values[0]".to_string(),
-                    encoded: "values\\u{5b}0\\u{5d}".to_string(),
+                    source: "values\\u{5b}0\\u{5d}".to_source(),
                 }],
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 20)),
             }
         );
-        assert_eq!(reader.state.cursor, 19);
+        assert_eq!(reader.cursor().index, 19);
 
         let mut reader = Reader::new("values[0] :");
         assert_eq!(
@@ -215,12 +216,12 @@ mod tests {
                 delimiter: None,
                 elements: vec![TemplateElement::String {
                     value: "values[0]".to_string(),
-                    encoded: "values[0]".to_string(),
+                    source: "values[0]".to_source(),
                 }],
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 10)),
             }
         );
-        assert_eq!(reader.state.cursor, 9);
+        assert_eq!(reader.cursor().index, 9);
 
         let mut reader = Reader::new("\\u{5b}0\\u{5d}");
         assert_eq!(
@@ -229,12 +230,12 @@ mod tests {
                 delimiter: None,
                 elements: vec![TemplateElement::String {
                     value: "[0]".to_string(),
-                    encoded: "\\u{5b}0\\u{5d}".to_string(),
+                    source: "\\u{5b}0\\u{5d}".to_source(),
                 }],
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 14)),
             }
         );
-        assert_eq!(reader.state.cursor, 13);
+        assert_eq!(reader.cursor().index, 13);
     }
 
     #[test]
@@ -253,19 +254,19 @@ mod tests {
         let mut reader = Reader::new("[0]:");
         let error = parse(&mut reader).err().unwrap();
         assert!(!error.recoverable);
-        assert_eq!(reader.state.cursor, 3);
+        assert_eq!(reader.cursor().index, 3);
 
         let mut reader = Reader::new("\\l");
         let error = parse(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 2 });
-        assert_eq!(error.inner, ParseError::EscapeChar);
+        assert_eq!(error.kind, ParseErrorKind::EscapeChar);
 
         let mut reader = Reader::new(r#"{"id":1}"#);
         let error = parse(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 1 });
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: "key-string".to_string()
             }
         );
@@ -281,29 +282,29 @@ mod tests {
     fn test_key_string_text() {
         let mut reader = Reader::new("aaa\\:");
         assert_eq!(key_string_text(&mut reader), "aaa");
-        assert_eq!(reader.state.cursor, 3);
+        assert_eq!(reader.cursor().index, 3);
     }
 
     #[test]
     fn test_key_string_escaped_char() {
         let mut reader = Reader::new("\\u{0a}");
         assert_eq!(key_string_escaped_char(&mut reader).unwrap(), '\n');
-        assert_eq!(reader.state.cursor, 6);
+        assert_eq!(reader.cursor().index, 6);
 
         let mut reader = Reader::new("\\:");
         assert_eq!(key_string_escaped_char(&mut reader).unwrap(), ':');
-        assert_eq!(reader.state.cursor, 2);
+        assert_eq!(reader.cursor().index, 2);
 
         let mut reader = Reader::new("x");
         let error = key_string_escaped_char(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 1 });
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: "\\".to_string()
             }
         );
         assert!(error.recoverable);
-        assert_eq!(reader.state.cursor, 0);
+        assert_eq!(reader.cursor().index, 0);
     }
 }

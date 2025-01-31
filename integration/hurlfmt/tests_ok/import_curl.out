@@ -1,5 +1,7 @@
 GET http://localhost:8000/hello
 
+GET http://localhost:8000/hello
+
 GET http://localhost:8000/custom-headers
 Fruit: Raspberry
 Fruit: Apple
@@ -40,4 +42,7 @@ status < 500
 GET https://localhost:8001/hello
 [Options]
 insecure: true
+
+GET http://localhost:8000/hello
+Empty-Header:
 

@@ -1,6 +1,6 @@
 # coding=utf-8
-from flask import request, make_response
 from app import app
+from flask import make_response, request
 
 
 @app.route("/default-headers")
@@ -47,3 +47,9 @@ def response_headers():
     # resp.headers['Beverage'] = '\x63\x61\x66\xc3\xa9'
     resp.headers["Beverage"] = "cafe"
     return resp
+
+
+@app.route("/empty-headers")
+def empty_headers():
+    assert request.headers.get("Empty-Header") == ""
+    return ""

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,8 +29,7 @@ pub fn input_files() -> clap::Arg {
 pub fn check() -> clap::Arg {
     clap::Arg::new("check")
         .long("check")
-        .help("Run in 'check' mode")
-        .conflicts_with("format")
+        .help("Run in check mode")
         .conflicts_with("output")
         .action(clap::ArgAction::SetTrue)
 }
@@ -42,15 +41,6 @@ pub fn color() -> clap::Arg {
         .conflicts_with("no_color")
         .conflicts_with("in_place")
         .action(clap::ArgAction::SetTrue)
-}
-
-pub fn format() -> clap::Arg {
-    clap::Arg::new("format")
-        .long("format")
-        .value_name("FORMAT")
-        .help("Specify output format: hurl, json or html")
-        .num_args(1)
-        .hide(true)
 }
 
 pub fn in_place() -> clap::Arg {

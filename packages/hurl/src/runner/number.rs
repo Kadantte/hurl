@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,16 +61,6 @@ fn format_float(value: f64) -> String {
     }
 }
 
-impl Number {
-    pub fn _type(&self) -> String {
-        match self {
-            Number::Float(_) => "float".to_string(),
-            Number::Integer(_) => "integer".to_string(),
-            Number::BigInteger(_) => "string".to_string(),
-        }
-    }
-}
-
 impl From<f64> for Number {
     fn from(value: f64) -> Self {
         Number::Float(value)
@@ -128,8 +118,8 @@ fn number_components(s: &str) -> (bool, &str, &str) {
             None => (false, s.trim_start_matches('0'), ""),
             Some(index) => (
                 false,
-                &s[..index].trim_start_matches('0'),
-                &s[(index + 1)..].trim_end_matches('0'),
+                (s[..index].trim_start_matches('0')),
+                (s[(index + 1)..].trim_end_matches('0')),
             ),
         },
         Some(s) => {
@@ -165,8 +155,8 @@ mod tests {
         let integer_minus_one = Number::from(-1);
         let integer_one = Number::from(1);
         let integer_two = Number::from(2);
-        let integer_max = Number::from(i64::max_value());
-        let integer_min = Number::from(i64::min_value());
+        let integer_max = Number::from(i64::MAX);
+        let integer_min = Number::from(i64::MIN);
 
         let float_zero = Number::from(0.0);
         let float_one = Number::from(1.0);
