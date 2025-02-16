@@ -4,20 +4,28 @@
 
 Asserts are used to test various properties of an HTTP response. Asserts can be implicits (such as version, status, 
 headers) or explicit within an `[Asserts]` section. The delimiter of the request / response is `HTTP <STATUS-CODE>`: 
-after this delimiter, you'll find the implicit asserts, then an `[Asserts]` section with all the explicits checks.
+after this delimiter, you'll find the implicit asserts, then an `[Asserts]` section with all the explicit checks.
 
 
 ```hurl
-GET https://api/example.org/cats
+GET https://example.org/api/cats
 HTTP 200
-Content-Type: application/json; charset=utf-8      # Implicit assert on Content-Type Hedaer
-[Asserts]                                          # Explicit asserts section 
+# Implicit assert on `Content-Type` Header
+Content-Type: application/json; charset=utf-8 
+[Asserts]
+# Explicit asserts section 
 bytes count == 120
 header "Content-Type" contains "utf-8"
 jsonpath "$.cats" count == 49
 jsonpath "$.cats[0].name" == "Felix"
 jsonpath "$.cats[0].lives" == 9
 ```
+
+Body responses can be encoded by server (see [`Content-Encoding` HTTP header]) but asserts in Hurl files are not 
+affected by this content compression. All body asserts (`body`, `bytes`, `sha256` etc...) work _after_ content decoding.
+
+Finally, body text asserts (`body`, `jsonpath`, `xpath` etc...) are also decoded to strings based on [`Content-Type` header] 
+so these asserts can be written with usual strings. 
 
 ## Implicit asserts
 
@@ -144,6 +152,7 @@ An assert consists of a query followed by a predicate. The format of the query
 is shared with [captures], and can be one of :
 
 - [`status`](#status-assert)
+- [`version`](#version-assert)
 - [`header`](#header-assert)
 - [`url`](#url-assert)
 - [`cookie`](#cookie-assert)
@@ -168,7 +177,7 @@ Predicates consist of a predicate function and a predicate value. Predicate func
 
 | Predicate          | Description                                                                         | Example                                                                               | 
 |--------------------|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
-| __`==`__           | Query and predicate value are equals                                                | `jsonpath "$.book" == "Dune"`                                                         |
+| __`==`__           | Query and predicate value are equal                                                 | `jsonpath "$.book" == "Dune"`                                                         |
 | __`!=`__           | Query and predicate value are different                                             | `jsonpath "$.color" != "red"`                                                         |
 | __`>`__            | Query number is greater than predicate value                                        | `jsonpath "$.year" > 1978`                                                            |
 | __`>=`__           | Query number is greater than or equal to the predicate value                        | `jsonpath "$.year" >= 1978`                                                           |
@@ -182,10 +191,11 @@ Predicates consist of a predicate function and a predicate value. Predicate func
 | __`exists`__       | Query returns a value                                                               | `jsonpath "$.book" exists`                                                            |
 | __`isBoolean`__    | Query returns a boolean                                                             | `jsonpath "$.succeeded" isBoolean`                                                    |
 | __`isCollection`__ | Query returns a collection                                                          | `jsonpath "$.books" isCollection`                                                     |
-| __`isDate`__       | Query returns a date                                                                | `jsonpath "$.publication_date" isDate`                                                |
 | __`isEmpty`__      | Query returns an empty collection                                                   | `jsonpath "$.movies" isEmpty`                                                         |
 | __`isFloat`__      | Query returns a float                                                               | `jsonpath "$.height" isFloat`                                                         |
 | __`isInteger`__    | Query returns an integer                                                            | `jsonpath "$.count" isInteger`                                                        |
+| __`isIsoDate`__    | Query string returns a [RFC 3339] date (`YYYY-MM-DDTHH:mm:ss.sssZ`)                 | `jsonpath "$.publication_date" isIsoDate`                                             |
+| __`isNumber`__     | Query returns an integer or a float                                                 | `jsonpath "$.count" isNumber`                                                         |
 | __`isString`__     | Query returns a string                                                              | `jsonpath "$.name" isString`                                                          |
 
 
@@ -238,7 +248,8 @@ In this case, the XPath query `string(//article/@data-visible)` returns a string
 string.
 
 The predicate function `==` can be used with string, numbers or booleans; `startWith` and `contains` can only
-be used with strings and bytes, while `matches` only works on string. If a query returns a number, using a `matches` predicate will cause a runner error.
+be used with strings and bytes, while `matches` only works on string. If a query returns a number, using a `matches` 
+predicate will cause a runner error.
 
 ```hurl
 # A really well tested web page...
@@ -263,6 +274,18 @@ GET https://example.org
 HTTP *
 [Asserts]
 status < 300
+```
+
+### Version assert
+
+Check the received HTTP version. Version assert consists of the keyword `version` followed by a predicate
+function and value.
+
+```hurl
+GET https://example.org
+HTTP *
+[Asserts]
+version == "2"
 ```
 
 ### Header assert
@@ -367,7 +390,7 @@ cookie "LSID[Domain]" not exists
 cookie "LSID[Path]" == "/accounts"
 cookie "LSID[Secure]" exists
 cookie "LSID[HttpOnly]" exists
-cookie "LSID[SameSite]" equals "Lax"
+cookie "LSID[SameSite]" == "Lax"
 ```
 
 > `Secure` and `HttpOnly` attributes can only be tested with `exists` or `not exists` predicates
@@ -376,10 +399,8 @@ cookie "LSID[SameSite]" equals "Lax"
 
 ### Body assert
 
-Check the value of the received HTTP response body when decoded as a string.
-Body assert consists of the keyword `body` followed by a predicate function and
-value. The encoding used to decode the body is based on the `charset` value in the
-`Content-Type` header response.
+Check the value of the received HTTP response body when decoded as a string. Body assert consists of the keyword `body` 
+followed by a predicate function and value.
 
 ```hurl
 GET https://example.org
@@ -388,18 +409,23 @@ HTTP 200
 body contains "<h1>Welcome!</h1>"
 ```
 
+The encoding used to decode the response body bytes to a string is based on the `charset` value in the `Content-Type` 
+header response.
+
 ```hurl
 # Our HTML response is encoded with GB 2312 (see https://en.wikipedia.org/wiki/GB_2312)
 GET https://example.org/cn
 HTTP 200
 [Asserts]
 header "Content-Type" == "text/html; charset=gb2312"
+# bytes of the response, without any text decoding:
 bytes contains hex,c4e3bac3cac0bde7; # 你好世界 encoded in GB 2312
+# text of the response, decoded with GB 2312:
 body contains "你好世界"
 ```
 
-If the `Content-Type` doesn't include any encoding hint, a [`decode` filter] can be used to explicitly decode the body response
-bytes.
+If the `Content-Type` response header doesn't include any encoding hint, a [`decode` filter] can be used to explicitly 
+decode the response body bytes.
 
 ```hurl
 # Our HTML response is encoded using GB 2312.
@@ -413,10 +439,31 @@ bytes contains hex,c4e3bac3cac0bde7; # 你好世界 encoded in GB2312
 bytes decode "gb2312" contains "你好世界"
 ```
 
+Body asserts are automatically decompressed based on the value of `Content-Encoding` response header. So,
+whatever is the response compression (`gzip`, `brotli`) etc... asserts values don't depend on the content encoding.
+
+```hurl
+# Request a gzipped reponse, the `body` asserts works with ungzipped response
+GET https://example.org
+Accept-Encoding: gzip
+HTTP 200
+[Asserts]
+header "Content-Encoding" == "gzip"
+body contains "<h1>Welcome!</h1>"
+
+# Without content encoding, asserts remains identical
+GET https://example.org
+HTTP 200
+[Asserts]
+header "Content-Encoding" not exists
+body contains "<h1>Welcome!</h1>"
+```
+
+
 ### Bytes assert
 
-Check the value of the received HTTP response body as a bytestream. Body assert
-consists of the keyword `bytes` followed by a predicate function and value.
+Check the value of the received HTTP response body as a bytestream. Body assert consists of the keyword `bytes` 
+followed by a predicate function and value.
 
 ```hurl
 GET https://example.org/data.bin
@@ -426,6 +473,10 @@ bytes startsWith hex,efbbbf;
 bytes count == 12424
 header "Content-Length" == "12424"
 ```
+
+Like `body` assert, `bytes` assert works _after_ content encoding decompression (so the predicates values are not
+affected by `Content-Encoding` response header value).
+
 
 ### XPath assert
 
@@ -560,7 +611,7 @@ Alternatively, `matches` predicate support [JavaScript-like Regular expression s
 the readability:
 
 ```hurl
-GET https://sample.org/hello
+GET https://example.org/hello
 HTTP 200
 [Asserts]
 
@@ -578,7 +629,7 @@ jsonpath "$.name" matches /Hello [a-zA-Z]+!/
 Check that the HTTP received body, decoded as text, matches a regex pattern.
 
 ```hurl
-GET https://sample.org/hello
+GET https://example.org/hello
 HTTP 200
 [Asserts]
 regex "^(\\d{4}-\\d{2}-\\d{2})$" == "2018-12-31"
@@ -603,6 +654,26 @@ HTTP 200
 sha256 == hex,039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81;
 ```
 
+Like `body` assert, `sha256` assert works _after_ content encoding decompression (so the predicates values are not
+affected by `Content-Encoding` response header). For instance, if we have a resource `a.txt` on a server with a 
+given hash `abcdef`, `sha256` value is not affected by `Content-Encoding`:
+
+```hurl
+# Without content encoding compression:
+GET https://example.org/a.txt
+HTTP 200
+[Asserts]
+sha256 == hex,abcdef;
+
+# With content encoding compression:
+GET https://example.org/a.txt
+Accept-Encoding: brotli
+HTTP 200
+[Asserts]
+header "Content-Encoding" == "brotli"
+sha256 == hex,abcdef;
+```
+
 ### MD5 assert
 
 Check response body [MD5] hash.
@@ -614,6 +685,8 @@ HTTP 200
 md5 == hex,ed076287532e86365e841e92bfc50d8c;
 ```
 
+Like `sha256` asserts, `md5` assert works _after_ content encoding decompression (so the predicates values are not
+affected by `Content-Encoding` response header)
 
 ### Variable assert
 
@@ -632,7 +705,7 @@ variable "pets" count == 200
 Check the total duration (sending plus receiving time) of the HTTP transaction.
 
 ```hurl
-GET https://sample.org/helloworld
+GET https://example.org/helloworld
 HTTP 200
 [Asserts]
 duration < 1000   # Check that response time is less than one second
@@ -657,13 +730,18 @@ certificate "Serial-Number" matches "[0-9af]+"
 ## Body
 
 Optional assertion on the received HTTP response body. Body section can be seen
-as syntactic sugar over [body asserts] (with `equals` predicate function). If the
+as syntactic sugar over [body asserts] (with `==` predicate). If the
 body of the response is a [JSON] string or a [XML] string, the body assertion can
 be directly inserted without any modification. For a text based body that is neither JSON nor XML,
 one can use multiline string that starts with <code>&#96;&#96;&#96;</code> and ends
 with <code>&#96;&#96;&#96;</code>. For a precise byte control of the response body,
 a [Base64] encoded string or an input file can be used to describe exactly
 the body byte content to check.
+
+Like explicit [`body` assert], the body section is automatically decompressed based on the value of `Content-Encoding` 
+response header. So, whatever is the response compression (`gzip`, `brotli`, etc...) body section doesn't depend on
+the content encoding. For textual body sections (JSON, XML, multiline, etc...), content is also decoded to string, based
+on the value of `Content-Type` response header.
 
 ### JSON body
 
@@ -828,3 +906,7 @@ of all file nodes.
 [count]: /docs/filters.md#count
 [`decode` filter]: /docs/filters.md#decode
 [headers implicit asserts]: #headers
+[RFC 3339]: https://www.rfc-editor.org/rfc/rfc3339
+[`Content-Encoding` HTTP header]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding
+[`Content-Type` header]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Type
+[`body` assert]: #body-assert

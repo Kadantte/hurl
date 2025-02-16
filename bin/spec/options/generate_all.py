@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-from typing import List
 import glob
-from option import Option
-import generate_source
-import generate_man
-import generate_completion
-import sys
 import re
+import sys
+from typing import List
+
+import generate_completion
+import generate_man
+import generate_source
+from option import Option
 
 
 def get_option_files(dir) -> List[str]:
@@ -54,8 +55,24 @@ def generate_completion_files(name: str, option_files: List[str]):
         [Option.parse_file(option_file) for option_file in option_files],
         key=lambda option: option.name,
     )
+
     output_file = "completions/" + name + ".bash"
     src = generate_completion.generate_bash_completion(name, options)
+    sys.stderr.write("Generate " + output_file + "\n")
+    open(output_file, "w").write(src + "\n")
+
+    output_file = "completions/_" + name
+    src = generate_completion.generate_zsh_completion(name, options)
+    sys.stderr.write("Generate " + output_file + "\n")
+    open(output_file, "w").write(src + "\n")
+
+    output_file = "completions/" + name + ".fish"
+    src = generate_completion.generate_fish_completion(name, options)
+    sys.stderr.write("Generate " + output_file + "\n")
+    open(output_file, "w").write(src + "\n")
+
+    output_file = "completions/_" + name + ".ps1"
+    src = generate_completion.generate_powershell_completion(name, options)
     sys.stderr.write("Generate " + output_file + "\n")
     open(output_file, "w").write(src + "\n")
 

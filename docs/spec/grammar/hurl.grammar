@@ -55,17 +55,17 @@ response-section:
 
 query-string-params-section:
   lt*
-  "[QueryStringParams]" lt
+  ("[QueryStringParams]" | "[Query]") lt
   key-value*
 
 form-params-section:
   lt*
-  "[FormParams]" lt
+  ("[FormParams]" | "[Form]") lt
   key-value*
 
 multipart-form-data-section:
   lt*
-  "[MultipartFormData]" lt
+  ("[MultipartFormData]" | "[Multipart]") lt
   multipart-form-data-param*
 
 cookies-section:
@@ -108,7 +108,7 @@ file-contenttype: [a-zA-Z0-9/+-]+
 
 capture:
   lt*
-  key-string ":" query (sp filter)* lt
+  key-string ":" query (sp filter)* (sp "redact")? lt
 
 assert:
   lt*
@@ -122,9 +122,11 @@ option:
   | client-key-option
   | compressed-option
   | connect-to-option
+  | connect-timeout-option
   | delay-option
   | follow-redirect-option
   | follow-redirect-trusted-option
+  | header-option
   | http10-option
   | http11-option
   | http2-option
@@ -132,6 +134,7 @@ option:
   | insecure-option
   | ipv4-option
   | ipv6-option
+  | limit-rate-option
   | max-redirs-option
   | netrc-option
   | netrc-file-option
@@ -139,11 +142,13 @@ option:
   | output-option
   | path-as-is-option
   | proxy-option
+  | repeat-option
   | resolve-option
   | retry-option
   | retry-interval-option
   | skip-option
   | unix-socket-option
+  | user-option
   | variable-option
   | verbose-option
   | very-verbose-option
@@ -153,7 +158,7 @@ aws-sigv4-option: "aws-sigv4" ":" value-string lt
 
 ca-certificate-option: "cacert" ":" filename lt
 
-client-certificate-option: "cert" ":" value-string lt
+client-certificate-option: "cert" ":" filename-password lt
 
 client-key-option: "key" ":" value-string lt
 
@@ -161,11 +166,15 @@ compressed-option: "compressed" ":" boolean-option lt
 
 connect-to-option: "connect-to" ":" value-string lt
 
-delay-option: "delay" ":" integer-option lt
+connect-timeout-option: "connect-timeout" ":" duration-option lt
+
+delay-option: "delay" ":" duration-option lt
 
 follow-redirect-option: "location" ":" boolean-option lt
 
 follow-redirect-trusted-option: "location-trusted" ":" boolean-option lt
+
+header-option: "header" ":" value-string lt
 
 http10-option: "http1.0" ":" boolean-option lt
 
@@ -180,6 +189,8 @@ insecure-option: "insecure" ":" boolean-option lt
 ipv4-option: "ipv4" ":" boolean-option lt
 
 ipv6-option: "ipv6" ":" boolean-option lt
+
+limit-rate-option: "limit-rate" ":" integer-option lt
 
 max-redirs-option: "max-redirs" ":" integer-option lt
 
@@ -197,13 +208,17 @@ proxy-option: "proxy" ":" value-string lt
 
 resolve-option: "resolve" ":" value-string lt
 
+repeat-option: "repeat" ":" integer-option lt
+
 retry-option: "retry" ":" integer-option lt
 
-retry-interval-option: "retry-interval" ":" integer-option lt
+retry-interval-option: "retry-interval" ":" duration-option lt
 
 skip-option: "skip" ":" boolean-option lt
 
 unix-socket-option: "unix-socket" ":" value-string lt
+
+user-option: "user" ":" value-string lt
 
 variable-option: "variable" ":" variable-definition lt
 
@@ -213,9 +228,13 @@ very-verbose-option: "very-verbose" ":" boolean-option lt
 
 variable-definition: variable-name "=" variable-value
 
-boolean-option: boolean | template
+boolean-option: boolean | placeholder
 
-integer-option: integer | template
+integer-option: integer | placeholder
+
+duration-option: (integer duration-unit?)  | placeholder
+
+duration-unit: "ms" | "s" | "m"
 
 variable-value:
     null
@@ -229,6 +248,7 @@ variable-value:
 
 query:
     status-query
+  | version-query
   | url-query
   | header-query
   | certificate-query
@@ -244,6 +264,8 @@ query:
   | md5-query
 
 status-query: "status"
+
+version-query: "version"
 
 url-query: "url"
 
@@ -296,18 +318,19 @@ predicate-func:
   | string-predicate
   | collection-predicate
   | date-predicate
+  | iso-date-predicate
 
-equal-predicate: ("equals" | "==") sp predicate-value
+equal-predicate: "==" sp predicate-value
 
-not-equal-predicate: ("notEquals" | "!=") sp predicate-value
+not-equal-predicate: "!=" sp predicate-value
 
-greater-predicate: ("greaterThan" | ">") sp (number | quoted-string)
+greater-predicate: ">" sp (number | quoted-string)
 
-greater-or-equal-predicate: ("greaterThanOrEquals" | ">=") sp sp* (number | quoted-string)
+greater-or-equal-predicate: ">=" sp sp* (number | quoted-string)
 
-less-predicate: ("lessThan" | "<") sp (number | quoted-string)
+less-predicate: "<" sp (number | quoted-string)
 
-less-or-equal-predicate: ("lessThanOrEquals" | "<=") sp (number | quoted-string)
+less-or-equal-predicate: "<=" sp (number | quoted-string)
 
 start-with-predicate: "startsWith" sp (quoted-string | oneline-hex | oneline-base64)
 
@@ -335,16 +358,19 @@ collection-predicate: "isCollection"
 
 date-predicate: "isDate"
 
+iso-date-predicate: "isIsoDate"
+
 predicate-value:
     boolean
   | multiline-string
   | null
   | number
+  | oneline-string
   | oneline-base64
   | oneline-file
   | oneline-hex
   | quoted-string
-  | template
+  | placeholder
 
 
 # Bytes
@@ -371,7 +397,7 @@ oneline-hex: "hex," hexdigit* ";"
 
 # Strings
 
-quoted-string: "\"" (quoted-string-content | template)* "\""
+quoted-string: "\"" (quoted-string-content | placeholder)* "\""
 
 quoted-string-content: (quoted-string-text | quoted-string-escaped-char)*
 
@@ -380,7 +406,7 @@ quoted-string-text: ~["\\]+
 quoted-string-escaped-char: "\\" ("\"" | "\\" | "\b" | "\f" | "\n" | "\r" | "\t" | "\u" unicode-char)
 
 
-key-string: (key-string-content | template)+
+key-string: (key-string-content | placeholder)+
 
 key-string-content: (key-string-text | key-string-escaped-char)*
 
@@ -389,7 +415,7 @@ key-string-text: (alphanum | "_" | "-" | "." | "[" | "]" | "@" | "$") +
 key-string-escaped-char: "\\" ("#" | ":" | "\\" | "\b" | "\f" | "\n" | "\r" | "\t" | "\u" unicode-char )
 
 
-value-string: (value-string-content | template)*
+value-string: (value-string-content | placeholder)*
 
 value-string-content: (value-string-text | value-string-escaped-char)*
 
@@ -398,7 +424,7 @@ value-string-text: ~[#\n\\]+
 value-string-escaped-char: "\\" ("#" | "\\" | "\b" | "\f" | "\n" | "\r" | "\t" | "\u" unicode-char )
 
 
-oneline-string: "`" (oneline-string-content | template)* "`"
+oneline-string: "`" (oneline-string-content | placeholder)* "`"
 
 oneline-string-content: (oneline-string-text | oneline-string-escaped-char)*
 
@@ -408,8 +434,8 @@ oneline-string-escaped-char: "\\" ("`" | "#" | "\\" | "b" | "f" | "u" unicode-ch
 
 
 multiline-string:
-  "```" multiline-string-type? lt
-  (multiline-string-content | template)* lt
+  "```" multiline-string-type? ("," multiline-string-attribute)* lt
+  (multiline-string-content | placeholder)* lt
   "```"
 
 multiline-string-type:
@@ -419,29 +445,42 @@ multiline-string-type:
   | "xml"
   | "graphql"
 
+multiline-string-attribute:
+    "escape"
+  | "novariable"
+
 multiline-string-content: (multiline-string-text | multiline-string-escaped-char)*
 
 multiline-string-text:  ~[\\]+ ~"```"
 
 multiline-string-escaped-char: "\\" ( "\\" | "b" | "f" | "n" | "r" | "t" | "`" | "u" unicode-char)
 
-filename: (filename-content | template)*
+filename: (filename-content | placeholder)*
 
 filename-content: (filename-text | filename-escaped-char)*
 
-filename-text: ~[#; \n\\]+
+filename-text: ~[#;{} \n\\]+
 
-filename-escaped-char: "\\" (";" | "#" | [ ])
+filename-escaped-char: "\\" ( "\\" | "b" | "f" | "n" | "r" | "t" | "#" | ";"| " " | "{" | "}" | "u" unicode-char)
 
+
+filename-password: (filename-password-content | placeholder)*
+
+filename-password-content: (filename-password-text | filename-password-escaped-char)*
+
+filename-password-text: ~[#;{} \n\\]+
+
+filename-password-escaped-char: "\\" ( "\\" | "b" | "f" | "n" | "r" | "t" | "#" | ";" | " " | "{" | "}" | ":" | "u" unicode-char)
 
 unicode-char: "{" hexdigit+ "}"
+
 
 
 
 # JSON
 
 json-value:
-    template
+    placeholder
   | json-object
   | json-array
   | json-string
@@ -455,7 +494,7 @@ json-key-value: json-string ":" json-value
 
 json-array: "[" json-value ("," json-value)* "]"
 
-json-string: "\"" (json-string-content | template)* "\""
+json-string: "\"" (json-string-content | placeholder)* "\""
 
 json-string-content: json-string-text | json-string-escaped-char
 
@@ -464,22 +503,41 @@ json-string-text: ~["\\]
 json-string-escaped-char:
     "\\" ("\"" | "\\" | "b" | "f" | "n" | "r" | "t" | "u" hexdigit hexdigit hexdigit hexdigit)
 
-json-number: integer fraction? exponent?
+json-number: [-]? json-integer fraction? exponent?
+
+json-integer: "0" | [1-9] digit*
 
 
-# Template / Expression
+#  Expression
 
-template: "{{" expr "}}"
+placeholder: "{{" expr "}}"
 
-expr: variable-name (sp filter)*
+expr: (variable-name | function) (sp filter)*
 
 variable-name: [A-Za-z] [A-Za-z_-0-9]*
+
+
+# Function
+
+function:
+    env-function
+  | now-function
+  | uuid-function
+
+env-function: "getEnv"
+
+now-function: "newDate"
+
+uuid-function: "newUuid"
+
 
 
 # Filter
 
 filter:
-    count-filter
+    base64-decode-filter
+  | base64-encode-filter
+  | count-filter
   | days-after-now-filter
   | days-before-now-filter
   | decode-filter
@@ -492,10 +550,15 @@ filter:
   | replace-filter
   | split-filter
   | to-date-filter
+  | to-float-filter
   | to-int-filter
   | url-decode-filter
   | url-encode-filter
   | xpath-filter
+
+base64-decode-filter: "base64Decode"
+
+base64-encode-filter: "base64Encode"
 
 count-filter: "count"
 
@@ -522,6 +585,8 @@ replace-filter: "replace" sp (quoted-string | regex) sp quoted-string
 split-filter: "split" sp quoted-string
 
 to-date-filter: "toDate"
+
+to-float-filter: "toFloat"
 
 to-int-filter: "toInt"
 

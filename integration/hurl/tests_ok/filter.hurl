@@ -1,10 +1,11 @@
 GET http://localhost:8000/filter
-
 HTTP 200
 [Captures]
 url: jsonpath "$.url"
 text: jsonpath "$.text"
 [Asserts]
+jsonpath "$.file" base64Decode == hex,e4bda0e5a5bde4b896e7958c;
+jsonpath "$.file" base64Decode base64Encode == "5L2g5aW95LiW55WM"
 jsonpath "$.list" count == 3
 jsonpath "$.list" nth 1 == 2
 jsonpath "$.message" regex /Hello (.*)!/ == "Bob"
@@ -19,11 +20,18 @@ jsonpath "$.escaped_html[1]" htmlUnescape == "Foo © bar 𝌆 baz ☃ qux"
 jsonpath "$.escaped_html[2]" htmlUnescape == "A foo"
 variable "text" htmlEscape htmlUnescape == "{{text}}"
 jsonpath "$.id" toInt == 123
+jsonpath "$.id" toFloat == 123
 jsonpath "$.score" toInt == 1
+jsonpath "$.score" toFloat == 1.6
 jsonpath "$.ips" split ", " count == 3
 jsonpath "$.ips" replace ", " "|" == "192.168.2.1|10.0.0.20|10.0.0.10"
 jsonpath "$.json" jsonpath "$.message" == "Hello"
+jsonpath "$.pi" toFloat == 3.141592653589793
+jsonpath "$.pi" toFloat > 3
+jsonpath "$.pi" toFloat < 4
+jsonpath "$.ten" toInt == 10
 {
+  "file": "5L2g5aW95LiW55WM",
   "list": [1,2,3],
   "message": "Hello Bob!",
   "url": "https://mozilla.org/?x=шеллы",
@@ -37,5 +45,7 @@ jsonpath "$.json" jsonpath "$.message" == "Hello"
   "id": "123",
   "score": 1.6,
   "ips": "192.168.2.1, 10.0.0.20, 10.0.0.10",
-  "json": "{\"message\": \"Hello\"}"
+  "json": "{\"message\": \"Hello\"}",
+  "pi": "3.141592653589793",
+  "ten": 10
 }

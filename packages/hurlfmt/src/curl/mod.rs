@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ impl HurlOption {
         }
     }
 }
+
 impl fmt::Display for HurlOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.name, self.value)
@@ -43,9 +44,11 @@ impl fmt::Display for HurlOption {
 }
 
 pub fn parse(s: &str) -> Result<String, String> {
+    let cleaned_s = s.replace("\\\n", "").replace("\\\r\n", "");
+
     let lines: Vec<&str> = regex::Regex::new(r"\n|\r\n")
         .unwrap()
-        .split(s)
+        .split(&cleaned_s)
         .filter(|s| !s.is_empty())
         .collect();
     let mut s = String::new();
@@ -53,7 +56,7 @@ pub fn parse(s: &str) -> Result<String, String> {
         let hurl_str = parse_line(line).map_err(|message| {
             format!("Can not parse curl command at line {}: {message}", i + 1)
         })?;
-        s.push_str(format!("{hurl_str}\n").as_str())
+        s.push_str(format!("{hurl_str}\n").as_str());
     }
     Ok(s)
 }
@@ -68,7 +71,8 @@ fn parse_line(s: &str) -> Result<String, String> {
         .arg(commands::max_redirects())
         .arg(commands::method())
         .arg(commands::retry())
-        .arg(commands::url());
+        .arg(commands::url())
+        .arg(commands::url_param());
 
     let params = args::split(s)?;
     let arg_matches = match command.try_get_matches_from_mut(params) {
@@ -94,7 +98,11 @@ fn format(
 ) -> String {
     let mut s = format!("{method} {url}");
     for header in headers {
-        s.push_str(format!("\n{header}").as_str());
+        if let Some(stripped) = header.strip_suffix(";") {
+            s.push_str(format!("\n{}:", stripped).as_str());
+        } else {
+            s.push_str(format!("\n{header}").as_str());
+        }
     }
     if !options.is_empty() {
         s.push_str("\n[Options]");
@@ -159,6 +167,26 @@ curl http://localhost:8000/custom-headers -H 'Fruit:Raspberry'
     }
 
     #[test]
+    fn test_parse_with_escape() {
+        let hurl_str = r#"GET http://localhost:8000/custom_headers
+Fruit:Raspberry
+Fruit:Banana
+
+"#;
+
+        assert_eq!(
+            parse(
+                r#"curl http://localhost:8000/custom_headers \
+                -H 'Fruit:Raspberry' \
+                -H 'Fruit:Banana'
+"#,
+            )
+            .unwrap(),
+            hurl_str
+        );
+    }
+
+    #[test]
     fn test_hello() {
         let hurl_str = r#"GET http://localhost:8000/hello
 "#;
@@ -181,6 +209,17 @@ Test: '
         );
         assert_eq!(
             parse_line("curl http://localhost:8000/custom-headers   --header Fruit:Raspberry -H 'Fruit: Banana' -H $'Test: \\''  ").unwrap(),
+            hurl_str
+        );
+    }
+
+    #[test]
+    fn test_empty_headers() {
+        let hurl_str = r#"GET http://localhost:8000/empty-headers
+Empty-Header:
+"#;
+        assert_eq!(
+            parse_line("curl http://localhost:8000/empty-headers -H 'Empty-Header;'").unwrap(),
             hurl_str
         );
     }

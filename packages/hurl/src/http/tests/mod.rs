@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,30 @@
  * limitations under the License.
  *
  */
-use crate::http::{Header, HeaderVec, Method, Param, RequestCookie, RequestSpec, Response};
+//! Some [`Request`]/[`Response`] used by tests.
+use std::str::FromStr;
 
-/// Some Request Response to be used by tests
+use crate::http::{
+    Header, HeaderVec, HttpVersion, Method, Param, RequestCookie, RequestSpec, Response, Url,
+};
+
+fn default_response() -> Response {
+    Response {
+        version: HttpVersion::Http10,
+        status: 200,
+        headers: HeaderVec::new(),
+        body: vec![],
+        duration: Default::default(),
+        url: Url::from_str("http://localhost").unwrap(),
+        certificate: None,
+        ip_addr: Default::default(),
+    }
+}
 
 pub fn hello_http_request() -> RequestSpec {
     RequestSpec {
         method: Method("GET".to_string()),
-        url: "http://localhost:8000/hello".to_string(),
+        url: Url::from_str("http://localhost:8000/hello").unwrap(),
         ..Default::default()
     }
 }
@@ -42,7 +58,7 @@ pub fn json_http_response() -> Response {
 "#
             .to_string(),
         ),
-        ..Default::default()
+        ..default_response()
     }
 }
 
@@ -63,7 +79,7 @@ pub fn xml_two_users_http_response() -> Response {
 "#
             .to_string(),
         ),
-        ..Default::default()
+        ..default_response()
     }
 }
 
@@ -85,7 +101,7 @@ pub fn xml_three_users_http_response() -> Response {
 "#
             .to_string(),
         ),
-        ..Default::default()
+        ..default_response()
     }
 }
 
@@ -97,7 +113,7 @@ pub fn hello_http_response() -> Response {
     Response {
         headers,
         body: String::into_bytes(String::from("Hello World!")),
-        ..Default::default()
+        ..default_response()
     }
 }
 
@@ -109,7 +125,7 @@ pub fn bytes_http_response() -> Response {
     Response {
         headers,
         body: vec![255],
-        ..Default::default()
+        ..default_response()
     }
 }
 
@@ -122,14 +138,14 @@ pub fn html_http_response() -> Response {
         body: String::into_bytes(String::from(
             "<html><head><meta charset=\"UTF-8\"></head><body><br></body></html>",
         )),
-        ..Default::default()
+        ..default_response()
     }
 }
 
 pub fn query_http_request() -> RequestSpec {
     RequestSpec {
         method: Method("GET".to_string()),
-        url: "http://localhost:8000/querystring-params".to_string(),
+        url: Url::from_str("http://localhost:8000/querystring-params").unwrap(),
         querystring: vec![
             Param {
                 name: String::from("param1"),
@@ -151,7 +167,7 @@ pub fn custom_http_request() -> RequestSpec {
 
     RequestSpec {
         method: Method("GET".to_string()),
-        url: "http://localhost/custom".to_string(),
+        url: Url::from_str("http://localhost/custom").unwrap(),
         headers,
         cookies: vec![
             RequestCookie {

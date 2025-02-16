@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,23 +15,24 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
+use hurl_core::ast::{
+    JsonListElement, JsonObjectElement, JsonValue, Placeholder, Template, TemplateElement,
+};
+use hurl_core::parser::{parse_json_boolean, parse_json_null, parse_json_number};
+use hurl_core::reader::Reader;
 
-use hurl_core::ast::{JsonListElement, JsonObjectElement, JsonValue, Template, TemplateElement};
-use hurl_core::parser::{parse_json_boolean, parse_json_null, parse_json_number, Reader};
-
-use crate::runner::error::{Error, RunnerError};
-use crate::runner::template::render_expression;
-use crate::runner::value::Value;
+use super::template::eval_template;
+use crate::runner::error::{RunnerError, RunnerErrorKind};
+use crate::runner::{expr, VariableSet};
 
 /// Evaluates a JSON value to a string given a set of `variables`.
 /// If `keep_whitespace` is true, whitespace is preserved from the JSonValue, otherwise
 /// it is trimmed.
 pub fn eval_json_value(
     json_value: &JsonValue,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     keep_whitespace: bool,
-) -> Result<String, Error> {
+) -> Result<String, RunnerError> {
     match json_value {
         JsonValue::Null => Ok("null".to_string()),
         JsonValue::Number(s) => Ok(s.clone()),
@@ -64,26 +65,26 @@ pub fn eval_json_value(
                 Ok(format!("{{{}}}", elems_string.join(",")))
             }
         }
-        JsonValue::Expression(exp) => {
-            let s = render_expression(exp, variables)?;
+        JsonValue::Placeholder(Placeholder { expr, .. }) => {
+            let s = expr::render(expr, variables)?;
 
             // The String can only be null, a bool, a number
             // It will be easier when your variables value have a type
             let mut reader = Reader::new(s.as_str());
-            let start = reader.state;
+            let start = reader.cursor();
             if parse_json_number(&mut reader).is_ok() {
                 return Ok(s);
             }
-            reader.state = start;
+            reader.seek(start);
             if parse_json_boolean(&mut reader).is_ok() {
                 return Ok(s);
             }
-            reader.state = start;
+            reader.seek(start);
             if parse_json_null(&mut reader).is_ok() {
                 return Ok(s);
             }
-            let inner = RunnerError::InvalidJson { value: s };
-            Err(Error::new(exp.variable.source_info, inner, false))
+            let kind = RunnerErrorKind::InvalidJson { value: s };
+            Err(RunnerError::new(expr.source_info, kind, false))
         }
     }
 }
@@ -93,9 +94,9 @@ pub fn eval_json_value(
 /// it is trimmed.
 fn eval_json_list_element(
     element: &JsonListElement,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     keep_whitespace: bool,
-) -> Result<String, Error> {
+) -> Result<String, RunnerError> {
     let s = eval_json_value(&element.value, variables, keep_whitespace)?;
     if keep_whitespace {
         Ok(format!("{}{}{}", element.space0, s, element.space1))
@@ -109,14 +110,15 @@ fn eval_json_list_element(
 /// it is trimmed.
 fn eval_json_object_element(
     element: &JsonObjectElement,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     keep_whitespace: bool,
-) -> Result<String, Error> {
+) -> Result<String, RunnerError> {
+    let name = eval_template(&element.name, variables)?;
     let value = eval_json_value(&element.value, variables, keep_whitespace)?;
     if keep_whitespace {
         Ok(format!(
             "{}\"{}\"{}:{}{}{}",
-            element.space0, element.name, element.space1, element.space2, value, element.space3
+            element.space0, name, element.space1, element.space2, value, element.space3
         ))
     } else {
         Ok(format!("\"{}\":{}", element.name, value))
@@ -131,8 +133,8 @@ fn eval_json_object_element(
 /// will be evaluated to the JSON String "Hello \""
 pub fn eval_json_template(
     template: &Template,
-    variables: &HashMap<String, Value>,
-) -> Result<String, Error> {
+    variables: &VariableSet,
+) -> Result<String, RunnerError> {
     let Template { elements, .. } = template;
     {
         let mut value = String::new();
@@ -148,12 +150,12 @@ pub fn eval_json_template(
 
 fn eval_json_template_element(
     template_element: &TemplateElement,
-    variables: &HashMap<String, Value>,
-) -> Result<String, Error> {
+    variables: &VariableSet,
+) -> Result<String, RunnerError> {
     match template_element {
-        TemplateElement::String { encoded, .. } => Ok(encoded.clone()),
-        TemplateElement::Expression(expr) => {
-            let s = render_expression(expr, variables)?;
+        TemplateElement::String { source, .. } => Ok(source.to_string()),
+        TemplateElement::Placeholder(Placeholder { expr, .. }) => {
+            let s = expr::render(expr, variables)?;
             Ok(encode_json_string(&s))
         }
     }
@@ -177,9 +179,12 @@ fn encode_json_char(c: char) -> String {
 #[cfg(test)]
 mod tests {
     use hurl_core::ast::*;
+    use hurl_core::reader::Pos;
+    use hurl_core::typing::ToSource;
 
-    use super::super::error::RunnerError;
+    use super::super::error::RunnerErrorKind;
     use super::*;
+    use crate::runner::Value;
 
     pub fn json_hello_world_value() -> JsonValue {
         // "hello\u0020{{name}}!"
@@ -188,15 +193,18 @@ mod tests {
             elements: vec![
                 TemplateElement::String {
                     value: "Hello ".to_string(),
-                    encoded: "Hello\\u0020".to_string(),
+                    source: "Hello\\u0020".to_source(),
                 },
-                TemplateElement::Expression(Expr {
+                TemplateElement::Placeholder(Placeholder {
                     space0: Whitespace {
                         value: String::new(),
                         source_info: SourceInfo::new(Pos::new(1, 15), Pos::new(1, 15)),
                     },
-                    variable: Variable {
-                        name: "name".to_string(),
+                    expr: Expr {
+                        kind: ExprKind::Variable(Variable {
+                            name: "name".to_string(),
+                            source_info: SourceInfo::new(Pos::new(1, 15), Pos::new(1, 19)),
+                        }),
                         source_info: SourceInfo::new(Pos::new(1, 15), Pos::new(1, 19)),
                     },
                     space1: Whitespace {
@@ -206,7 +214,7 @@ mod tests {
                 }),
                 TemplateElement::String {
                     value: "!".to_string(),
-                    encoded: "!".to_string(),
+                    source: "!".to_source(),
                 },
             ],
             source_info: SourceInfo::new(Pos::new(1, 2), Pos::new(1, 22)),
@@ -222,7 +230,7 @@ mod tests {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "firstName".to_string(),
-                        encoded: "firstName".to_string(),
+                        source: "firstName".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
                 },
@@ -232,7 +240,7 @@ mod tests {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "John".to_string(),
-                        encoded: "John".to_string(),
+                        source: "John".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
                 }),
@@ -243,8 +251,10 @@ mod tests {
 
     #[test]
     fn test_scalar_value() {
-        let mut variables = HashMap::new();
-        variables.insert("name".to_string(), Value::String("Bob".to_string()));
+        let mut variables = VariableSet::new();
+        variables
+            .insert("name".to_string(), Value::String("Bob".to_string()))
+            .unwrap();
         assert_eq!(
             eval_json_value(&JsonValue::Null, &variables, true).unwrap(),
             "null".to_string()
@@ -265,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_error() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
         let error = eval_json_value(&json_hello_world_value(), &variables, true)
             .err()
             .unwrap();
@@ -274,8 +284,8 @@ mod tests {
             SourceInfo::new(Pos::new(1, 15), Pos::new(1, 19))
         );
         assert_eq!(
-            error.inner,
-            RunnerError::TemplateVariableNotDefined {
+            error.kind,
+            RunnerErrorKind::TemplateVariableNotDefined {
                 name: "name".to_string()
             }
         );
@@ -283,8 +293,10 @@ mod tests {
 
     #[test]
     fn test_list_value() {
-        let mut variables = HashMap::new();
-        variables.insert("name".to_string(), Value::String("Bob".to_string()));
+        let mut variables = VariableSet::new();
+        variables
+            .insert("name".to_string(), Value::String("Bob".to_string()))
+            .unwrap();
         assert_eq!(
             eval_json_value(
                 &JsonValue::List {
@@ -330,8 +342,8 @@ mod tests {
         let template = Template {
             delimiter: Some('"'),
             elements: vec![TemplateElement::String {
-                encoded: "Hi".to_string(),
                 value: "Hi".to_string(),
+                source: "Hi".to_source(),
             }],
             source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
         };
@@ -362,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_object_value() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
         assert_eq!(
             eval_json_value(
                 &JsonValue::Object {
@@ -386,14 +398,14 @@ mod tests {
 
     #[test]
     fn test_escape_sequence() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
         assert_eq!(
             eval_json_value(
                 &JsonValue::String(Template {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "\n".to_string(),
-                        encoded: "\\n".to_string(),
+                        source: "\\n".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
                 }),
@@ -407,14 +419,14 @@ mod tests {
 
     #[test]
     fn test_eval_json_template() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
         assert_eq!(
             eval_json_template(
                 &Template {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "\n".to_string(),
-                        encoded: "\\n".to_string(),
+                        source: "\\n".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
                 },
@@ -424,8 +436,10 @@ mod tests {
             "\\n".to_string()
         );
 
-        let mut variables = HashMap::new();
-        variables.insert("quote".to_string(), Value::String("\"".to_string()));
+        let mut variables = VariableSet::new();
+        variables
+            .insert("quote".to_string(), Value::String("\"".to_string()))
+            .unwrap();
         assert_eq!(
             eval_json_template(
                 &Template {
@@ -433,12 +447,15 @@ mod tests {
                     elements: vec![
                         TemplateElement::String {
                             value: "Hello ".to_string(),
-                            encoded: "Hello ".to_string(),
+                            source: "Hello ".to_source(),
                         },
-                        TemplateElement::Expression(Expr {
+                        TemplateElement::Placeholder(Placeholder {
                             space0: whitespace(),
-                            variable: Variable {
-                                name: "quote".to_string(),
+                            expr: Expr {
+                                kind: ExprKind::Variable(Variable {
+                                    name: "quote".to_string(),
+                                    source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
+                                }),
                                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                             },
                             space1: whitespace(),
@@ -469,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_not_preserving_spaces() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
         assert_eq!(
             eval_json_value(&json_person_value(), &variables, false).unwrap(),
             r#"{"firstName":"John"}"#.to_string()

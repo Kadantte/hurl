@@ -13,15 +13,18 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions: {}
+
 jobs:
 
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
 
     - name: Checkout repository
-      uses: actions/checkout@v4.1.1
+      uses: actions/checkout@v4.2.2
       with:
+        persist-credentials: false
         ref: ${{ inputs.branch }}
 
     - name: Shellcheck
@@ -44,27 +47,39 @@ jobs:
       if: always()
       run: bin/check/hadolint.sh ./contrib/docker/Dockerfile
 
+    - name: Install Python 3.12
+      uses: actions/setup-python@v5.4.0
+      with:
+        python-version: '3.12'
+
     - name: Install prerequisites
       if: always()
       run: |
-        bin/check/install_prerequisites.sh
-        bin/install_python3_venv.sh
-        export PATH=/tmp/hurl-python3-venv/bin:$PATH
+        bin/activate_python3_venv.sh
+        export PATH="/tmp/hurl-python3-venv/bin:$PATH"
+        echo "PATH=$PATH" >> $GITHUB_ENV
         which python3
         python3 --version
         pip --version
+        bin/check/install_prerequisites.sh
+
+    - name: Zizmor
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      if: always()
+      run: |
+        pip install zizmor
+        bin/check/zizmor.sh --github-token ${GITHUB_TOKEN} .github/workflows/*.yml
 
     - name: Check Rust version
       if: always()
-      run: bin/check/rust_version.py 7
+      run: |
+        python3 -m pip install requests --quiet
+        bin/check/rust_version.py 7
 
     - name: Generated
       if: always()
       run: bin/check/generated.sh
-
-    - name: Coverage
-      if: always()
-      run: bin/check/coverage.sh
 
     - name: Rustfmt
       if: always()
@@ -74,9 +89,9 @@ jobs:
       if: always()
       run: bin/check/clippy.sh
 
-    - name: Black
+    - name: Ruff
       if: always()
-      run: bin/check/black.sh
+      run: bin/check/ruff.sh
 
     - name: Check XML/HTML files
       if: always()
@@ -89,10 +104,6 @@ jobs:
         export PATH=target/release:$PATH
         bin/check/hurlfmt.sh
 
-    - name: Run crates update
-      if: always()
-      run: bin/check/crates.sh
-
     - name: Check crates licence
       if: always()
       run: python3 bin/check/license.py
@@ -100,3 +111,20 @@ jobs:
     - name: Check hurl crate API changes
       if: always()
       run: bin/check/compatibility.sh
+
+    - name: Check doc generation
+      if: always()
+      run: bin/check/doc.sh
+
+    - name: Check Valgrind
+      if: always()
+      run: |
+        sudo apt-get install -y valgrind
+        cargo install cargo-valgrind
+        bin/check/valgrind.sh
+
+    - name: Check completion files
+      if: always()
+      run: |
+        sudo apt-get install -y zsh fish powershell
+        bin/check/completion.sh

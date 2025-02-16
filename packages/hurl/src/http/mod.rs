@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,17 @@
  * limitations under the License.
  *
  */
+//! Various HTTP structures like requests, responses, cookies etc.
+//!
+//! The Hurl HTTP engine is not public. It's a wrapper around libcurl and only the models
+//! returned by an HTTP exchange are exposed.
 pub use self::call::Call;
 pub use self::certificate::Certificate;
 pub(crate) use self::client::Client;
 pub use self::cookie::{CookieAttribute, ResponseCookie};
-pub(crate) use self::core::{Cookie, Param, RequestCookie};
+pub use self::core::Cookie;
+pub(crate) use self::core::{Param, RequestCookie};
+pub use self::curl_cmd::CurlCmd;
 pub(crate) use self::error::HttpError;
 pub use self::header::{
     Header, HeaderVec, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, COOKIE, EXPECT, USER_AGENT,
@@ -31,6 +37,7 @@ pub use self::response::{HttpVersion, Response};
 #[cfg(test)]
 pub use self::tests::*;
 pub use self::timings::Timings;
+pub use self::url::Url;
 pub use self::version::libcurl_version_info;
 
 mod call;
@@ -38,16 +45,17 @@ mod certificate;
 mod client;
 mod cookie;
 mod core;
+mod curl_cmd;
 mod debug;
 mod easy_ext;
 mod error;
 mod header;
 mod headers_helper;
+mod ip;
 mod mimetype;
 mod options;
 mod request;
 mod request_spec;
-mod request_spec_curl_args;
 mod response;
 mod response_cookie;
 mod response_debug;
@@ -56,4 +64,5 @@ mod response_decoding;
 mod tests;
 mod timings;
 mod timings_debug;
+mod url;
 mod version;

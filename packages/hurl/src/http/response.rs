@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,8 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::http::certificate::Certificate;
-use crate::http::HeaderVec;
+use crate::http::ip::IpAddr;
+use crate::http::{HeaderVec, Url};
 
 /// Represents a runtime HTTP response.
 /// This is a real response, that has been executed by our HTTP client.
@@ -30,35 +31,24 @@ pub struct Response {
     pub headers: HeaderVec,
     pub body: Vec<u8>,
     pub duration: Duration,
-    pub url: String,
+    pub url: Url,
     /// The end-user certificate, in the response certificate chain
     pub certificate: Option<Certificate>,
-}
-
-impl Default for Response {
-    fn default() -> Self {
-        Response {
-            version: HttpVersion::Http10,
-            status: 200,
-            headers: HeaderVec::new(),
-            body: vec![],
-            duration: Default::default(),
-            url: String::new(),
-            certificate: None,
-        }
-    }
+    pub ip_addr: IpAddr,
 }
 
 impl Response {
     /// Creates a new HTTP response
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         version: HttpVersion,
         status: u32,
         headers: HeaderVec,
         body: Vec<u8>,
         duration: Duration,
-        url: &str,
+        url: Url,
         certificate: Option<Certificate>,
+        ip_addr: IpAddr,
     ) -> Self {
         Response {
             version,
@@ -66,8 +56,9 @@ impl Response {
             headers,
             body,
             duration,
-            url: url.to_string(),
+            url,
             certificate,
+            ip_addr,
         }
     }
 }
@@ -103,10 +94,15 @@ mod tests {
     fn get_header_values() {
         let mut headers = HeaderVec::new();
         headers.push(Header::new("Content-Length", "12"));
-
         let response = Response {
+            version: HttpVersion::Http10,
+            status: 200,
             headers,
-            ..Default::default()
+            body: vec![],
+            duration: Default::default(),
+            url: "http://localhost".parse().unwrap(),
+            certificate: None,
+            ip_addr: Default::default(),
         };
         assert_eq!(response.headers.values("Content-Length"), vec!["12"]);
         assert!(response.headers.values("Unknown").is_empty());

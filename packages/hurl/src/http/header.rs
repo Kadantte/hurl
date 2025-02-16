@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,17 +18,26 @@
 use core::fmt;
 use std::slice::Iter;
 
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Accept-Encoding>
 pub const ACCEPT_ENCODING: &str = "Accept-Encoding";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Authorization>
 pub const AUTHORIZATION: &str = "Authorization";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cookie>
 pub const COOKIE: &str = "Cookie";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding>
 pub const CONTENT_ENCODING: &str = "Content-Encoding";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Type>
 pub const CONTENT_TYPE: &str = "Content-Type";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Expect>
 pub const EXPECT: &str = "Expect";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Location>
 pub const LOCATION: &str = "Location";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie>
 pub const SET_COOKIE: &str = "Set-Cookie";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/User-Agent>
 pub const USER_AGENT: &str = "User-Agent";
 
-/// Represents an HTTP header
+/// Represents an HTTP header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Header {
     pub name: String,
@@ -74,7 +83,7 @@ impl HeaderVec {
     /// Returns a reference to the header associated with `name`.
     ///
     /// If there are multiple headers associated with `name`, then the first one is returned.
-    /// Use [`get_all`] to get all values associated with a given key.
+    /// Use [HeaderVec::get_all] to get all values associated with a given key.
     pub fn get(&self, name: &str) -> Option<&Header> {
         self.headers.iter().find(|h| h.name_eq(name))
     }
@@ -94,7 +103,7 @@ impl HeaderVec {
     where
         F: FnMut(&Header) -> bool,
     {
-        self.headers.retain(|h| f(h))
+        self.headers.retain(|h| f(h));
     }
 
     /// Returns an iterator over all the headers.
@@ -117,7 +126,7 @@ impl HeaderVec {
 
     /// Push a new `header` into the headers list.
     pub fn push(&mut self, header: Header) {
-        self.headers.push(header)
+        self.headers.push(header);
     }
 
     /// Returns all headers values.
@@ -180,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_iter() {
-        let data = vec![("foo", "xxx"), ("bar", "yyy0"), ("baz", "yyy1")];
+        let data = [("foo", "xxx"), ("bar", "yyy0"), ("baz", "yyy1")];
         let mut headers = HeaderVec::new();
         data.iter()
             .for_each(|(name, value)| headers.push(Header::new(name, value)));
@@ -188,15 +197,13 @@ mod tests {
         // Test iter()
         for (i, h) in headers.iter().enumerate() {
             assert_eq!(h.name, data[i].0);
-            assert_eq!(h.value, data[i].1)
+            assert_eq!(h.value, data[i].1);
         }
 
         // Test into_iter()
-        let mut i = 0;
-        for h in &headers {
+        for (i, h) in (&headers).into_iter().enumerate() {
             assert_eq!(h.name, data[i].0);
             assert_eq!(h.value, data[i].1);
-            i += 1;
         }
     }
 }

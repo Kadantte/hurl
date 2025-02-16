@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,15 @@
  * limitations under the License.
  *
  */
-use crate::ast::*;
-use crate::parser::combinators::*;
+use super::placeholder;
+use crate::ast::PredicateValue;
+use crate::combinator::choice;
 use crate::parser::multiline::multiline_string;
 use crate::parser::number::number;
-use crate::parser::primitives::*;
-use crate::parser::reader::Reader;
-use crate::parser::string::*;
-use crate::parser::{expr, Error, ParseError, ParseResult};
+use crate::parser::primitives::{base64, boolean, file, hex, null, regex};
+use crate::parser::string::{backtick_template, quoted_template};
+use crate::parser::{ParseError, ParseErrorKind, ParseResult};
+use crate::reader::Reader;
 
 pub fn predicate_value(reader: &mut Reader) -> ParseResult<PredicateValue> {
     choice(
@@ -51,8 +52,8 @@ pub fn predicate_value(reader: &mut Reader) -> ParseResult<PredicateValue> {
                 Ok(value) => Ok(PredicateValue::Base64(value)),
                 Err(e) => Err(e),
             },
-            |p1| match expr::parse(p1) {
-                Ok(value) => Ok(PredicateValue::Expression(value)),
+            |p1| match placeholder::parse(p1) {
+                Ok(value) => Ok(PredicateValue::Placeholder(value)),
                 Err(e) => Err(e),
             },
             |p1| match quoted_template(p1) {
@@ -63,6 +64,10 @@ pub fn predicate_value(reader: &mut Reader) -> ParseResult<PredicateValue> {
                 Ok(value) => Ok(PredicateValue::MultilineString(value)),
                 Err(e) => Err(e),
             },
+            |p1| match backtick_template(p1) {
+                Ok(value) => Ok(PredicateValue::String(value)),
+                Err(e) => Err(e),
+            },
             |p1| match regex(p1) {
                 Ok(value) => Ok(PredicateValue::Regex(value)),
                 Err(e) => Err(e),
@@ -71,20 +76,22 @@ pub fn predicate_value(reader: &mut Reader) -> ParseResult<PredicateValue> {
         reader,
     )
     .map_err(|e| {
-        let inner = if e.recoverable {
-            ParseError::PredicateValue
+        let kind = if e.recoverable {
+            ParseErrorKind::PredicateValue
         } else {
-            e.inner
+            e.kind
         };
-        Error::new(e.pos, false, inner)
+        ParseError::new(e.pos, false, kind)
     })
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::parser::ParseError;
+    use crate::ast::{Float, Number, I64};
+    use crate::parser::ParseErrorKind;
+    use crate::reader::Pos;
+    use crate::typing::ToSource;
 
     #[test]
     fn test_predicate_value() {
@@ -97,16 +104,13 @@ mod tests {
         let mut reader = Reader::new("1");
         assert_eq!(
             predicate_value(&mut reader).unwrap(),
-            PredicateValue::Number(Number::Integer(1))
+            PredicateValue::Number(Number::Integer(I64::new(1, "1".to_source())))
         );
 
         let mut reader = Reader::new("1.1");
         assert_eq!(
             predicate_value(&mut reader).unwrap(),
-            PredicateValue::Number(Number::Float(Float {
-                value: 1.1,
-                encoded: "1.1".to_string(),
-            }))
+            PredicateValue::Number(Number::Float(Float::new(1.1, "1.1".to_source())))
         );
     }
 
@@ -115,7 +119,7 @@ mod tests {
         let mut reader = Reader::new("xx");
         let error = predicate_value(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 1 });
-        assert_eq!(error.inner, ParseError::PredicateValue);
+        assert_eq!(error.kind, ParseErrorKind::PredicateValue);
         assert!(!error.recoverable);
     }
 
@@ -131,8 +135,8 @@ mod tests {
             }
         );
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: "\"".to_string()
             }
         );

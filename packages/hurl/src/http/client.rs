@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,10 @@
  * limitations under the License.
  *
  */
+use std::collections::HashMap;
 use std::str;
 use std::str::FromStr;
+use std::time::Instant;
 
 use base64::engine::general_purpose;
 use base64::Engine;
@@ -25,20 +27,23 @@ use curl::easy::{List, NetRc, SslOpt};
 use curl::{easy, Version};
 use encoding::all::ISO_8859_1;
 use encoding::{DecoderTrap, Encoding};
-use url::Url;
+use hurl_core::typing::Count;
 
 use crate::http::certificate::Certificate;
-use crate::http::core::*;
+use crate::http::curl_cmd::CurlCmd;
 use crate::http::debug::log_body;
 use crate::http::header::{
     HeaderVec, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, EXPECT, LOCATION, USER_AGENT,
 };
+use crate::http::ip::IpAddr;
 use crate::http::options::ClientOptions;
-use crate::http::request::*;
-use crate::http::request_spec::*;
-use crate::http::response::*;
 use crate::http::timings::Timings;
-use crate::http::{easy_ext, Call, Header, HttpError, Verbosity};
+use crate::http::url::Url;
+use crate::http::{
+    easy_ext, Call, Cookie, FileParam, Header, HttpError, HttpVersion, IpResolve, Method,
+    MultipartParam, Param, Request, RequestCookie, RequestSpec, RequestedHttpVersion, Response,
+    Verbosity,
+};
 use crate::runner::Output;
 use crate::util::logger::Logger;
 use crate::util::path::ContextDir;
@@ -50,37 +55,12 @@ use crate::util::path::ContextDir;
 #[derive(Debug)]
 pub struct Client {
     /// The handle to libcurl binding
-    handle: Box<easy::Easy>,
-    /// Current State
-    state: ClientState,
+    handle: easy::Easy,
     /// HTTP version support
     http2: bool,
     http3: bool,
-}
-
-/// Represents the state of the HTTP client.
-/// We only keep the last requested HTTP version because it's the only property which change
-/// must trigger a connection reset on the libcurl handle. The state can be queried to check
-/// if there has been change from the previous HTTP request.
-#[derive(Copy, Clone, Eq, PartialEq, Default, Debug)]
-struct ClientState {
-    changed: bool,
-    requested_http_version: Option<RequestedHttpVersion>,
-}
-
-impl ClientState {
-    /// Set a new requested HTTP version.
-    pub fn set_requested_http_version(&mut self, version: RequestedHttpVersion) {
-        if let Some(prev_version) = self.requested_http_version {
-            self.changed = prev_version != version;
-        }
-        self.requested_http_version = Some(version);
-    }
-
-    /// Returns true if state has changed from the previous request.
-    pub fn has_changed(&self) -> bool {
-        self.changed
-    }
+    /// Certificates cache to get SSL certificates on reused libcurl connections.
+    certificates: HashMap<i64, Certificate>,
 }
 
 impl Client {
@@ -89,10 +69,10 @@ impl Client {
         let handle = easy::Easy::new();
         let version = Version::get();
         Client {
-            handle: Box::new(handle),
-            state: ClientState::default(),
+            handle,
             http2: version.feature_http2(),
             http3: version.feature_http3(),
+            certificates: HashMap::new(),
         }
     }
 
@@ -101,23 +81,29 @@ impl Client {
         &mut self,
         request_spec: &RequestSpec,
         options: &ClientOptions,
-        logger: &Logger,
+        logger: &mut Logger,
     ) -> Result<Vec<Call>, HttpError> {
         let mut calls = vec![];
 
         let mut request_spec = request_spec.clone();
+        let mut options = options.clone();
 
-        // Unfortunately, follow-location feature from libcurl can not be used
-        // libcurl returns a single list of headers for the 2 responses
-        // Hurl needs to keep everything.
+        // Unfortunately, follow-location feature from libcurl can not be used as libcurl returns a
+        // single list of headers for the 2 responses and Hurl needs to keep every header of every
+        // response.
         let mut redirect_count = 0;
         loop {
-            let call = self.execute(&request_spec, options, logger)?;
-            let base_url = call.request.base_url()?;
-            let redirect_url = self.get_follow_location(&call.response, &base_url);
+            let call = self.execute(&request_spec, &options, logger)?;
+            // If we don't follow redirection, we can early exit here.
+            if !options.follow_location {
+                calls.push(call);
+                break;
+            }
+            let request_url = call.request.url.clone();
             let status = call.response.status;
+            let redirect_url = self.follow_location(&request_url, &call.response)?;
             calls.push(call);
-            if !options.follow_location || redirect_url.is_none() {
+            if redirect_url.is_none() {
                 break;
             }
             let redirect_url = redirect_url.unwrap();
@@ -125,18 +111,22 @@ impl Client {
             logger.debug(&format!("=> Redirect to {redirect_url}"));
             logger.debug("");
             redirect_count += 1;
-            if let Some(max_redirect) = options.max_redirect {
+            if let Count::Finite(max_redirect) = options.max_redirect {
                 if redirect_count > max_redirect {
                     return Err(HttpError::TooManyRedirect);
                 }
-            }
-            let redirect_method = get_redirect_method(status, request_spec.method);
-            let headers = if options.follow_location_trusted {
-                request_spec.headers
-            } else {
-                request_spec.headers.retain(|h| !h.name_eq(AUTHORIZATION));
-                request_spec.headers
             };
+
+            let redirect_method = redirect_method(status, request_spec.method);
+            let mut headers = request_spec.headers;
+
+            // When following redirection, we filter `AUTHORIZATION` header unless explicitly told
+            // to trust the redirected host with `--location-trusted`.
+            let host_changed = request_url.host() != redirect_url.host();
+            if host_changed && !options.follow_location_trusted {
+                headers.retain(|h| !h.name_eq(AUTHORIZATION));
+                options.user = None;
+            }
             request_spec = RequestSpec {
                 method: redirect_method,
                 url: redirect_url,
@@ -153,7 +143,7 @@ impl Client {
         &mut self,
         request_spec: &RequestSpec,
         options: &ClientOptions,
-        logger: &Logger,
+        logger: &mut Logger,
     ) -> Result<Call, HttpError> {
         // The handle can be mutated in this function: to start from a clean state, we reset it
         // prior to everything.
@@ -161,7 +151,8 @@ impl Client {
 
         let (url, method) = self.configure(request_spec, options, logger)?;
 
-        let start = Utc::now();
+        let start = Instant::now();
+        let start_dt = Utc::now();
         let verbose = options.verbosity.is_some();
         let very_verbose = options.verbosity == Some(Verbosity::VeryVerbose);
         let mut request_headers = HeaderVec::new();
@@ -196,10 +187,11 @@ impl Client {
                     // Logs method, version and request headers now.
                     if verbose {
                         logger.debug_method_version_out(&lines[0]);
-                        for header in &request_headers {
-                            logger.debug_header_out(&header.name, &header.value);
-                        }
-                        logger.info(">");
+                        let headers = request_headers
+                            .iter()
+                            .map(|h| (h.name.as_str(), h.value.as_str()))
+                            .collect::<Vec<_>>();
+                        logger.debug_headers_out(&headers);
                     }
 
                     // If we don't send any data, we log an empty body here instead of relying on
@@ -237,7 +229,7 @@ impl Client {
                     if s.starts_with("HTTP/") {
                         status_lines.push(s);
                     } else {
-                        response_headers.push(s)
+                        response_headers.push(s);
                     }
                 }
                 true
@@ -258,38 +250,50 @@ impl Client {
             }
         }
 
+        // We perform an additional check on the response size if maximum filesize is specified
+        // because curl can fail to do this under certain circumstances.
+        // See:
+        // - <https://github.com/Orange-OpenSource/hurl/issues/3245>
+        // - <https://curl.se/docs/manpage.html#--max-filesize>
+        // > Note: before curl 8.4.0, when the file size is not known prior to download, for such files
+        // > this option has no effect even if the file transfer ends up being larger than this given limit.
+        if let Some(max_filesize) = options.max_filesize {
+            if response_body.len() as u64 > max_filesize {
+                return Err(HttpError::AllowedResponseSizeExceeded(max_filesize));
+            }
+        }
+
         let status = self.handle.response_code()?;
         // TODO: explain why status_lines is Vec ?
         let version = match status_lines.last() {
-            None => return Err(HttpError::StatuslineIsMissing),
             Some(status_line) => self.parse_response_version(status_line)?,
+            None => return Err(HttpError::CouldNotParseResponse),
         };
         let headers = self.parse_response_headers(&response_headers);
         let length = response_body.len();
-        let certificate = if let Some(cert_info) = easy_ext::get_certinfo(&self.handle)? {
-            match Certificate::try_from(cert_info) {
-                Ok(value) => Some(value),
-                Err(message) => {
-                    logger.error(&format!("can not parse certificate - {message}"));
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        let stop = Utc::now();
-        let duration = (stop - start).to_std().unwrap();
-        let timings = Timings::new(&mut self.handle, start, stop);
 
-        let request = Request::new(&method.to_string(), &url, request_headers, request_body);
+        let certificate = self.cert_info(logger)?;
+        let duration = start.elapsed();
+        let stop_dt = start_dt + duration;
+        let timings = Timings::new(&mut self.handle, start_dt, stop_dt);
+
+        let url = Url::from_str(&url)?;
+        let ip_addr = self.primary_ip()?;
+        let request = Request::new(
+            &method.to_string(),
+            url.clone(),
+            request_headers,
+            request_body,
+        );
         let response = Response::new(
             version,
             status,
             headers,
             response_body,
             duration,
-            &url,
+            url,
             certificate,
+            ip_addr,
         );
 
         if verbose {
@@ -309,10 +313,13 @@ impl Client {
                 .filter(|s| s.starts_with("HTTP/"))
                 .for_each(|s| logger.debug_status_version_in(s.trim()));
 
-            for header in &response.headers {
-                logger.debug_header_in(&header.name, &header.value);
-            }
-            logger.info("<");
+            let headers = response
+                .headers
+                .iter()
+                .map(|h| (h.name.as_str(), h.value.as_str()))
+                .collect::<Vec<_>>();
+            logger.debug_headers_in(&headers);
+
             if very_verbose {
                 logger.debug_important("Response body:");
                 response.log_body(true, logger);
@@ -334,7 +341,7 @@ impl Client {
         &mut self,
         request_spec: &RequestSpec,
         options: &ClientOptions,
-        logger: &Logger,
+        logger: &mut Logger,
     ) -> Result<(String, Method), HttpError> {
         // Activates cookie engine.
         // See <https://curl.se/libcurl/c/CURLOPT_COOKIEFILE.html>
@@ -351,7 +358,7 @@ impl Client {
         // way to get access to the outgoing headers.
         self.handle.verbose(true)?;
 
-        // We checks libcurl HTTP version support.
+        // We check libcurl HTTP version support.
         let http_version = options.http_version;
         if (http_version == RequestedHttpVersion::Http2 && !self.http2)
             || (http_version == RequestedHttpVersion::Http3 && !self.http3)
@@ -359,21 +366,11 @@ impl Client {
             return Err(HttpError::UnsupportedHttpVersion(http_version));
         }
 
-        // libcurl tries to reuse connections as much as possible (see <https://curl.se/libcurl/c/CURLOPT_HTTP_VERSION.html>)
-        // That's why an `handle` initiated with a HTTP 2 version may keep using HTTP 2 protocol
-        // even if we ask to switch to HTTP 3 in the same session (using `[Options]` section for
-        // instance).
-        // > Note that the HTTP version is just a request. libcurl still prioritizes to reuse
-        // > existing connections so it might then reuse a connection using a HTTP version you
-        // > have not asked for.
-        //
-        // So, if we detect a change of requested HTTP version, we force libcurl to refresh its
-        // connections (see <https://curl.se/libcurl/c/CURLOPT_FRESH_CONNECT.html>)
-        self.state.set_requested_http_version(http_version);
-        if self.state.has_changed() {
+        if !options.allow_reuse {
             logger.debug("Force refreshing connections because requested HTTP version change");
-            self.handle.fresh_connect(true)?;
         }
+        self.handle.fresh_connect(!options.allow_reuse)?;
+        self.handle.forbid_reuse(!options.allow_reuse)?;
         self.handle.http_version(options.http_version.into())?;
 
         self.handle.ip_resolve(options.ip_resolve.into())?;
@@ -391,7 +388,7 @@ impl Client {
         }
         self.handle.ssl_verify_host(!options.insecure)?;
         self.handle.ssl_verify_peer(!options.insecure)?;
-        if let Some(cacert_file) = options.cacert_file.clone() {
+        if let Some(cacert_file) = &options.cacert_file {
             self.handle.cainfo(cacert_file)?;
             self.handle.ssl_cert_type("PEM")?;
         }
@@ -407,16 +404,16 @@ impl Client {
             }
             self.handle.ssl_cert_type("PEM")?;
         }
-        if let Some(client_key_file) = options.client_key_file.clone() {
+        if let Some(client_key_file) = &options.client_key_file {
             self.handle.ssl_key(client_key_file)?;
             self.handle.ssl_cert_type("PEM")?;
         }
         self.handle.path_as_is(options.path_as_is)?;
-        if let Some(proxy) = options.proxy.clone() {
-            self.handle.proxy(proxy.as_str())?;
+        if let Some(proxy) = &options.proxy {
+            self.handle.proxy(proxy)?;
         }
-        if let Some(s) = options.no_proxy.clone() {
-            self.handle.noproxy(s.as_str())?;
+        if let Some(no_proxy) = &options.no_proxy {
+            self.handle.noproxy(no_proxy)?;
         }
         if let Some(unix_socket) = &options.unix_socket {
             self.handle.unix_socket(unix_socket)?;
@@ -435,6 +432,15 @@ impl Client {
         }
         self.handle.timeout(options.timeout)?;
         self.handle.connect_timeout(options.connect_timeout)?;
+        if let Some(max_filesize) = options.max_filesize {
+            self.handle.max_filesize(max_filesize)?;
+        }
+        if let Some(max_recv_speed) = options.max_recv_speed {
+            self.handle.max_recv_speed(max_recv_speed.0)?;
+        }
+        if let Some(max_send_speed) = options.max_send_speed {
+            self.handle.max_send_speed(max_send_speed.0)?;
+        }
 
         self.set_ssl_options(options.ssl_no_revoke)?;
 
@@ -447,7 +453,21 @@ impl Client {
         self.set_multipart(&request_spec.multipart)?;
         let request_spec_body = &request_spec.body.bytes();
         self.set_body(request_spec_body)?;
-        self.set_headers(request_spec, options)?;
+        // TODO: do we want to manage the headers with no content? There are two type of no-content
+        // headers: `foo:` and `foo;`. The first one can be used to remove libcurl headers (`Host:`)
+        // while the second one is used to send an empty header.
+        // See <https://github.com/Orange-OpenSource/hurl/issues/3536>
+        let options_headers = options
+            .headers
+            .iter()
+            .map(|h| h.as_str())
+            .collect::<Vec<&str>>();
+        let headers = &request_spec.headers.aggregate_raw_headers(&options_headers);
+        self.set_headers(
+            headers,
+            request_spec.implicit_content_type.as_deref(),
+            options,
+        )?;
         if let Some(aws_sigv4) = &options.aws_sigv4 {
             if let Err(e) = self.handle.aws_sigv4(aws_sigv4.as_str()) {
                 return match e.code() {
@@ -466,12 +486,13 @@ impl Client {
     }
 
     /// Generates URL.
-    fn generate_url(&mut self, url: &str, params: &[Param]) -> String {
+    fn generate_url(&mut self, url: &Url, params: &[Param]) -> String {
+        let url = url.raw();
         if params.is_empty() {
-            url.to_string()
+            url
         } else {
             let url = if url.ends_with('?') {
-                url.to_string()
+                url
             } else if url.contains('?') {
                 format!("{url}&")
             } else {
@@ -491,43 +512,45 @@ impl Client {
     /// Sets HTTP headers.
     fn set_headers(
         &mut self,
-        request_spec: &RequestSpec,
+        headers: &HeaderVec,
+        implicit_content_type: Option<&str>,
         options: &ClientOptions,
     ) -> Result<(), HttpError> {
-        let mut list = List::new();
+        let mut list = headers.to_curl_headers()?;
 
-        for header in &request_spec.headers {
-            list.append(&format!("{}: {}", header.name, header.value))?;
-        }
-
-        // If request has no Content-Type header, we set it if the content type has been set
+        // If request has no `Content-Type` header, we set it if the content type has been set
         // implicitly on this request.
-        if !request_spec.headers.contains_key(CONTENT_TYPE) {
-            if let Some(s) = &request_spec.implicit_content_type {
+        if !headers.contains_key(CONTENT_TYPE) {
+            if let Some(s) = implicit_content_type {
                 list.append(&format!("{}: {s}", CONTENT_TYPE))?;
             } else {
-                // We remove default Content-Type headers added by curl because we want
-                // to explicitly manage this header.
-                // For instance, with --data option, curl will send a 'Content-type: application/x-www-form-urlencoded'
-                // header.
+                // We remove default `Content-Type` headers added by curl because we want to
+                // explicitly manage this header.
+                // For instance, with --data option, curl will send a `Content-type: application/x-www-form-urlencoded`
+                // header. From <https://curl.se/libcurl/c/CURLOPT_HTTPHEADER.html>, we can delete
+                // the headers added by libcurl by adding a header with no content.
                 list.append(&format!("{}:", CONTENT_TYPE))?;
             }
         }
 
-        // Workaround for libcurl issue #11664: When Hurl explicitly sets `Expect:` to remove the header,
-        // libcurl will generate `SignedHeaders` that include `expect` even though the header is not
-        // present, causing some APIs to reject the request.
-        // Therefore we only remove this header when not in aws_sigv4 mode.
-        if !request_spec.headers.contains_key(EXPECT) && options.aws_sigv4.is_none() {
-            // We remove default Expect headers added by curl because we want
-            // to explicitly manage this header.
+        // Workaround for libcurl issue <https://github.com/curl/curl/issues/11664>:
+        // When Hurl explicitly sets `Expect:` to remove the header, libcurl will generate
+        // `SignedHeaders` that include `expect` even though the header is not present, causing
+        // some APIs to reject the request.
+        // Therefore, we only remove this header when not in aws_sigv4 mode.
+        if !headers.contains_key(EXPECT) && options.aws_sigv4.is_none() {
+            // We remove default Expect headers added by curl because we want to explicitly manage
+            // this header.
             list.append(&format!("{}:", EXPECT))?;
         }
 
-        if !request_spec.headers.contains_key(USER_AGENT) {
+        if !headers.contains_key(USER_AGENT) {
             let user_agent = match options.user_agent {
                 Some(ref u) => u.clone(),
-                None => format!("hurl/{}", clap::crate_version!()),
+                None => {
+                    let pkg_version = env!("CARGO_PKG_VERSION");
+                    format!("hurl/{pkg_version}")
+                }
             };
             list.append(&format!("{}: {user_agent}", USER_AGENT))?;
         }
@@ -544,12 +567,12 @@ impl Client {
             } else {
                 let user = user.as_bytes();
                 let authorization = general_purpose::STANDARD.encode(user);
-                if !request_spec.headers.contains_key(AUTHORIZATION) {
+                if !headers.contains_key(AUTHORIZATION) {
                     list.append(&format!("{}: Basic {authorization}", AUTHORIZATION))?;
                 }
             }
         }
-        if options.compressed && !request_spec.headers.contains_key(ACCEPT_ENCODING) {
+        if options.compressed && !headers.contains_key(ACCEPT_ENCODING) {
             list.append(&format!("{}: gzip, deflate, br", ACCEPT_ENCODING))?;
         }
 
@@ -588,7 +611,7 @@ impl Client {
                 // from libcurl::FormError to HttpError
                 match param {
                     MultipartParam::Param(Param { name, value }) => {
-                        form.part(name).contents(value.as_bytes()).add().unwrap()
+                        form.part(name).contents(value.as_bytes()).add().unwrap();
                     }
                     MultipartParam::FileParam(FileParam {
                         name,
@@ -663,25 +686,38 @@ impl Client {
         headers
     }
 
+    /// Get the IP address of the last connection from libcurl
+    fn primary_ip(&mut self) -> Result<IpAddr, HttpError> {
+        match self.handle.primary_ip()? {
+            Some(ip) => Ok(IpAddr::new(ip.to_string())),
+            None => Err(HttpError::NoPrimaryIp),
+        }
+    }
+
     /// Retrieves an optional location to follow
     ///
     /// You need:
     /// 1. the option follow_location set to true
     /// 2. a 3xx response code
     /// 3. a header Location
-    fn get_follow_location(&mut self, response: &Response, base_url: &str) -> Option<String> {
+    fn follow_location(
+        &mut self,
+        request_url: &Url,
+        response: &Response,
+    ) -> Result<Option<Url>, HttpError> {
         let response_code = response.status;
         if !(300..400).contains(&response_code) {
-            return None;
+            return Ok(None);
         }
-        response
-            .headers
-            .get(LOCATION)
-            .map(|h| get_redirect_url(&h.value, base_url))
+        let Some(location) = response.headers.get(LOCATION) else {
+            return Ok(None);
+        };
+        let url = request_url.join(&location.value)?;
+        Ok(Some(url))
     }
 
     /// Returns cookie storage.
-    pub fn get_cookie_storage(&mut self) -> Vec<Cookie> {
+    pub fn cookie_storage(&mut self, logger: &mut Logger) -> Vec<Cookie> {
         let list = self.handle.cookies().unwrap();
         let mut cookies = vec![];
         for cookie in list.iter() {
@@ -689,27 +725,23 @@ impl Client {
             if let Ok(cookie) = Cookie::from_str(line) {
                 cookies.push(cookie);
             } else {
-                eprintln!("warning: line <{line}> can not be parsed as cookie");
+                logger.warning(&format!("Line <{line}> can not be parsed as cookie"));
             }
         }
         cookies
     }
 
     /// Adds a cookie to the cookie jar.
-    pub fn add_cookie(&mut self, cookie: &Cookie, options: &ClientOptions) {
-        if options.verbosity.is_some() {
-            eprintln!("* add to cookie store: {cookie}");
-        }
+    pub fn add_cookie(&mut self, cookie: &Cookie, logger: &mut Logger) {
+        logger.debug(&format!("Add to cookie store <{cookie}> (experimental)"));
         self.handle
             .cookie_list(cookie.to_string().as_str())
             .unwrap();
     }
 
     /// Clears cookie storage.
-    pub fn clear_cookie_storage(&mut self, options: &ClientOptions) {
-        if options.verbosity.is_some() {
-            eprintln!("* clear cookie storage");
-        }
+    pub fn clear_cookie_storage(&mut self, logger: &mut Logger) {
+        logger.debug("Clear cookie storage (experimental)");
         self.handle.cookie_list("ALL").unwrap();
     }
 
@@ -720,50 +752,48 @@ impl Client {
         context_dir: &ContextDir,
         output: Option<&Output>,
         options: &ClientOptions,
-    ) -> String {
-        let mut arguments = vec!["curl".to_string()];
-        arguments.append(&mut request_spec.curl_args(context_dir));
-
-        // We extract the last part of the arguments (the url) to insert it
-        // after all the options
-        let url = arguments.pop().unwrap();
-
-        let cookies = all_cookies(&self.get_cookie_storage(), request_spec);
-        if !cookies.is_empty() {
-            arguments.push("--cookie".to_string());
-            arguments.push(format!(
-                "'{}'",
-                cookies
-                    .iter()
-                    .map(|c| c.to_string())
-                    .collect::<Vec<String>>()
-                    .join("; ")
-            ));
-        }
-        arguments.append(&mut options.curl_args());
-
-        // --output is not an option of the HTTP client, we deal with it here:
-        if let Some(output) = output {
-            arguments.push("--output".to_string());
-            arguments.push(output.to_string());
-        }
-
-        arguments.push(url);
-        arguments.join(" ")
+        logger: &mut Logger,
+    ) -> CurlCmd {
+        let cookies = self.cookie_storage(logger);
+        CurlCmd::new(request_spec, &cookies, context_dir, output, options)
     }
-}
 
-/// Returns the redirect url.
-fn get_redirect_url(location: &str, base_url: &str) -> String {
-    if location.starts_with('/') {
-        format!("{base_url}{location}")
-    } else {
-        location.to_string()
+    /// Returns the SSL certificates information associated to this call.
+    ///
+    /// Certificate information are cached by libcurl handle connection id, in order to get
+    /// SSL information even if libcurl connection is reused (see <https://github.com/Orange-OpenSource/hurl/issues/3031>).
+    fn cert_info(&mut self, logger: &mut Logger) -> Result<Option<Certificate>, HttpError> {
+        if let Some(cert_info) = easy_ext::cert_info(&self.handle)? {
+            match Certificate::try_from(cert_info) {
+                Ok(value) => {
+                    // We try to get the connection id for the libcurl handle and cache the
+                    // certificate. Getting a connection id can fail on older libcurl version, we
+                    // don't cache the certificate in these cases.
+                    if let Ok(conn_id) = easy_ext::conn_id(&self.handle) {
+                        self.certificates.insert(conn_id, value.clone());
+                    }
+                    Ok(Some(value))
+                }
+                Err(message) => {
+                    logger.warning(&format!("Can not parse certificate - {message}"));
+                    Ok(None)
+                }
+            }
+        } else {
+            // We query the cache to see if we have a cached certificate for this connection;
+            // As libcurl 8.2.0+ exposes the connection id through `CURLINFO_CONN_ID`, we don't
+            // raise an error if we can't get a connection id (older version than 8.2.0), and return
+            // a `None` certificate.
+            match easy_ext::conn_id(&self.handle) {
+                Ok(conn_id) => Ok(self.certificates.get(&conn_id).cloned()),
+                Err(_) => Ok(None),
+            }
+        }
     }
 }
 
 /// Returns the method used for redirecting a request/response with `response_status`.
-fn get_redirect_method(response_status: u32, original_method: Method) -> Method {
+fn redirect_method(response_status: u32, original_method: Method) -> Method {
     // This replicates curl's behavior
     match response_status {
         301..=303 => Method("GET".to_string()),
@@ -780,7 +810,7 @@ pub fn all_cookies(cookie_storage: &[Cookie], request_spec: &RequestSpec) -> Vec
         &mut cookie_storage
             .iter()
             .filter(|c| c.expires != "1") // cookie expired when libcurl set value to 1?
-            .filter(|c| match_cookie(c, request_spec.url.as_str()))
+            .filter(|c| match_cookie(c, &request_spec.url))
             .map(|c| RequestCookie {
                 name: c.name.clone(),
                 value: c.value.clone(),
@@ -791,12 +821,7 @@ pub fn all_cookies(cookie_storage: &[Cookie], request_spec: &RequestSpec) -> Vec
 }
 
 /// Matches cookie for a given URL.
-pub fn match_cookie(cookie: &Cookie, url: &str) -> bool {
-    // FIXME: is it possible to do it with libcurl?
-    let url = match Url::parse(url) {
-        Ok(url) => url,
-        Err(_) => return false,
-    };
+pub fn match_cookie(cookie: &Cookie, url: &Url) -> bool {
     if let Some(domain) = url.domain() {
         if cookie.include_subdomain == "FALSE" {
             if cookie.domain != domain {
@@ -820,6 +845,21 @@ impl Header {
             }
             None => None,
         }
+    }
+}
+
+impl HeaderVec {
+    /// Converts this list of [`Header`] to a lib curl header list.
+    fn to_curl_headers(&self) -> Result<List, HttpError> {
+        let mut curl_headers = List::new();
+        for header in self {
+            if header.value.is_empty() {
+                curl_headers.append(&format!("{};", header.name))?;
+            } else {
+                curl_headers.append(&format!("{}: {}", header.name, header.value))?;
+            }
+        }
+        Ok(curl_headers)
     }
 }
 
@@ -933,8 +973,12 @@ impl From<IpResolve> for easy::IpResolve {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::default::Default;
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::util::logger::LoggerOptionsBuilder;
+    use crate::util::term::{Stderr, WriteMode};
 
     #[test]
     fn test_parse_header() {
@@ -971,9 +1015,18 @@ mod tests {
             value: String::new(),
             http_only: false,
         };
-        assert!(match_cookie(&cookie, "http://example.com/toto"));
-        assert!(!match_cookie(&cookie, "http://sub.example.com/tata"));
-        assert!(!match_cookie(&cookie, "http://toto/tata"));
+        assert!(match_cookie(
+            &cookie,
+            &Url::from_str("http://example.com/toto").unwrap()
+        ));
+        assert!(!match_cookie(
+            &cookie,
+            &Url::from_str("http://sub.example.com/tata").unwrap()
+        ));
+        assert!(!match_cookie(
+            &cookie,
+            &Url::from_str("http://toto/tata").unwrap()
+        ));
 
         let cookie = Cookie {
             domain: "example.com".to_string(),
@@ -985,21 +1038,18 @@ mod tests {
             value: String::new(),
             http_only: false,
         };
-        assert!(match_cookie(&cookie, "http://example.com/toto"));
-        assert!(match_cookie(&cookie, "http://sub.example.com/toto"));
-        assert!(!match_cookie(&cookie, "http://example.com/tata"));
-    }
-
-    #[test]
-    fn test_redirect_url() {
-        assert_eq!(
-            get_redirect_url("http://localhost:8000/redirected", "http://localhost:8000"),
-            "http://localhost:8000/redirected".to_string()
-        );
-        assert_eq!(
-            get_redirect_url("/redirected", "http://localhost:8000"),
-            "http://localhost:8000/redirected".to_string()
-        );
+        assert!(match_cookie(
+            &cookie,
+            &Url::from_str("http://example.com/toto").unwrap()
+        ));
+        assert!(match_cookie(
+            &cookie,
+            &Url::from_str("http://sub.example.com/toto").unwrap()
+        ));
+        assert!(!match_cookie(
+            &cookie,
+            &Url::from_str("http://example.com/tata").unwrap()
+        ));
     }
 
     #[test]
@@ -1024,70 +1074,10 @@ mod tests {
         ];
         for (status, original, redirected) in data {
             assert_eq!(
-                get_redirect_method(status, Method(original.to_string())),
+                redirect_method(status, Method(original.to_string())),
                 Method(redirected.to_string())
             );
         }
-    }
-
-    #[test]
-    fn http_client_state_always_http2() {
-        let mut state = ClientState::default();
-        assert!(!state.has_changed());
-
-        // Client set HTTP 2 on all request, client state never changed
-
-        // - => HTTP/2: no change
-        state.set_requested_http_version(RequestedHttpVersion::Http2);
-        assert!(!state.has_changed());
-
-        // HTTP/2 => HTTP/2: no change
-        state.set_requested_http_version(RequestedHttpVersion::Http2);
-        assert!(!state.has_changed());
-    }
-
-    #[test]
-    fn http_client_state_always_default() {
-        let mut state = ClientState::default();
-        assert!(!state.has_changed());
-
-        // Client doesn't set HTTP version, client state never changed
-
-        // - => Default: no change
-        state.set_requested_http_version(RequestedHttpVersion::Default);
-        assert!(!state.has_changed());
-
-        // Default => Default: no change
-        state.set_requested_http_version(RequestedHttpVersion::Default);
-        assert!(!state.has_changed());
-    }
-
-    #[test]
-    fn http_client_state_changes() {
-        let mut state = ClientState::default();
-        assert!(!state.has_changed());
-
-        // Client set HTTP 2 on all request, client state never changed
-
-        // - => HTTP/2: no change
-        state.set_requested_http_version(RequestedHttpVersion::Http2);
-        assert!(!state.has_changed());
-
-        // HTTP/2 => HTTP/1.1: change
-        state.set_requested_http_version(RequestedHttpVersion::Http11);
-        assert!(state.has_changed());
-
-        // HTTP/1.1 => HTTP/1.1: no change
-        state.set_requested_http_version(RequestedHttpVersion::Http11);
-        assert!(!state.has_changed());
-
-        // HTTP/1.1 => Default: change
-        state.set_requested_http_version(RequestedHttpVersion::Default);
-        assert!(state.has_changed());
-
-        // Default => Default: no change
-        state.set_requested_http_version(RequestedHttpVersion::Default);
-        assert!(!state.has_changed());
     }
 
     #[test]
@@ -1095,11 +1085,11 @@ mod tests {
         let mut client = Client::new();
         let request = RequestSpec {
             method: Method("GET".to_string()),
-            url: "https://example.org".to_string(),
+            url: Url::from_str("https://example.org").unwrap(),
             ..Default::default()
         };
         let context_dir = ContextDir::default();
-        let file = Output::File("/tmp/foo.bin".to_string());
+        let file = Output::File(PathBuf::from("/tmp/foo.bin"));
         let output = Some(&file);
         let options = ClientOptions {
             aws_sigv4: Some("aws:amz:sts".to_string()),
@@ -1107,7 +1097,7 @@ mod tests {
             compressed: true,
             connects_to: vec!["example.com:443:host-47.example.com:443".to_string()],
             insecure: true,
-            max_redirect: Some(10),
+            max_redirect: Count::Finite(10),
             path_as_is: true,
             proxy: Some("localhost:3128".to_string()),
             no_proxy: None,
@@ -1118,9 +1108,13 @@ mod tests {
             ..Default::default()
         };
 
-        let cmd = client.curl_command_line(&request, &context_dir, output, &options);
+        let logger_options = LoggerOptionsBuilder::default().build();
+        let stderr = Stderr::new(WriteMode::Immediate);
+        let mut logger = Logger::new(&logger_options, stderr, &[]);
+
+        let cmd = client.curl_command_line(&request, &context_dir, output, &options, &mut logger);
         assert_eq!(
-            cmd,
+            cmd.to_string(),
             "curl \
          --aws-sigv4 aws:amz:sts \
          --cacert /etc/cert.pem \
@@ -1151,7 +1145,7 @@ mod tests {
         );
         assert_eq!(
             parse_cert_password("foobar:"),
-            ("foobar".to_string(), Some("".to_string()))
+            ("foobar".to_string(), Some(String::new()))
         );
         assert_eq!(
             parse_cert_password("foobar\\"),
@@ -1167,6 +1161,20 @@ mod tests {
         assert_eq!(
             parse_cert_password("foo\\\\:toto\\:tata:tutu"),
             ("foo\\".to_string(), Some("toto\\:tata:tutu".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_to_curl_headers() {
+        let mut headers = HeaderVec::new();
+        headers.push(Header::new("foo", "a"));
+        headers.push(Header::new("bar", "b"));
+        headers.push(Header::new("baz", ""));
+
+        let list = headers.to_curl_headers().unwrap();
+        assert_eq!(
+            list.iter().collect::<Vec<_>>(),
+            vec!["foo: a".as_bytes(), "bar: b".as_bytes(), "baz;".as_bytes()]
         );
     }
 }

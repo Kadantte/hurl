@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,148 @@
  * limitations under the License.
  *
  */
+//! This module regroups methods on AST nodes to be serialized as Hurl strings and expose
+//! Hurl file format identifier that can be used, for instance, as identifier when exporting
+//! an Hurl AST to a JSON representation.
 use core::fmt;
 
-use crate::ast::core::*;
+use crate::ast::{
+    BooleanOption, CertificateAttributeName, CookieAttribute, CookieAttributeName, CookiePath,
+    CountOption, DurationOption, Expr, ExprKind, FilterValue, Function, Hex, Method,
+    MultilineString, MultilineStringAttribute, MultilineStringKind, NaturalOption, Number,
+    OptionKind, Placeholder, PredicateFuncValue, QueryValue, Regex, Section, SectionValue, Status,
+    StatusValue, Template, TemplateElement, Variable, VariableDefinition, VariableValue, Version,
+    VersionValue,
+};
+
+impl fmt::Display for BooleanOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BooleanOption::Literal(v) => write!(f, "{}", v),
+            BooleanOption::Placeholder(v) => write!(f, "{}", v),
+        }
+    }
+}
+
+impl CertificateAttributeName {
+    /// Returns the Hurl string identifier of this certificate attribute name.
+    pub fn identifier(&self) -> &'static str {
+        match self {
+            CertificateAttributeName::Subject => "Subject",
+            CertificateAttributeName::Issuer => "Issuer",
+            CertificateAttributeName::StartDate => "Start-Date",
+            CertificateAttributeName::ExpireDate => "Expire-Date",
+            CertificateAttributeName::SerialNumber => "Serial-Number",
+        }
+    }
+}
+
+impl fmt::Display for CookiePath {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut buf = self.name.to_string();
+        if let Some(attribute) = &self.attribute {
+            let s = format!("[{attribute}]");
+            buf.push_str(s.as_str());
+        }
+        write!(f, "{buf}")
+    }
+}
+
+impl fmt::Display for CookieAttribute {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self.name {
+            CookieAttributeName::MaxAge(_) => "Max-Age",
+            CookieAttributeName::Value(_) => "Value",
+            CookieAttributeName::Expires(_) => "Expires",
+            CookieAttributeName::Domain(_) => "Domain",
+            CookieAttributeName::Path(_) => "Path",
+            CookieAttributeName::Secure(_) => "Secure",
+            CookieAttributeName::HttpOnly(_) => "HttpOnly",
+            CookieAttributeName::SameSite(_) => "SameSite",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl fmt::Display for CountOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CountOption::Literal(v) => write!(f, "{}", v),
+            CountOption::Placeholder(v) => write!(f, "{}", v),
+        }
+    }
+}
+
+impl fmt::Display for DurationOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DurationOption::Literal(v) => write!(f, "{}", v),
+            DurationOption::Placeholder(v) => write!(f, "{}", v),
+        }
+    }
+}
+
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.kind)
+    }
+}
+
+impl fmt::Display for ExprKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ExprKind::Variable(variable) => write!(f, "{}", variable),
+            ExprKind::Function(function) => write!(f, "{}", function),
+        }
+    }
+}
+
+impl FilterValue {
+    /// Returns the Hurl identifier for this filter type.
+    pub fn identifier(&self) -> &'static str {
+        match self {
+            FilterValue::Base64Decode => "base64Decode",
+            FilterValue::Base64Encode => "base64Encode",
+            FilterValue::Count => "count",
+            FilterValue::DaysAfterNow => "daysAfterNow",
+            FilterValue::DaysBeforeNow => "daysBeforeNow",
+            FilterValue::Decode { .. } => "decode",
+            FilterValue::Format { .. } => "format",
+            FilterValue::HtmlEscape => "htmlEscape",
+            FilterValue::HtmlUnescape => "htmlUnescape",
+            FilterValue::JsonPath { .. } => "jsonpath",
+            FilterValue::Nth { .. } => "nth",
+            FilterValue::Regex { .. } => "regex",
+            FilterValue::Replace { .. } => "replace",
+            FilterValue::Split { .. } => "split",
+            FilterValue::ToDate { .. } => "toDate",
+            FilterValue::ToFloat => "toFloat",
+            FilterValue::ToInt => "toInt",
+            FilterValue::UrlDecode => "urlDecode",
+            FilterValue::UrlEncode => "urlEncode",
+            FilterValue::XPath { .. } => "xpath",
+        }
+    }
+}
+
+impl fmt::Display for Function {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Function::NewDate => write!(f, "newDate"),
+            Function::NewUuid => write!(f, "newUuid"),
+        }
+    }
+}
+
+impl fmt::Display for Hex {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "hex,{}{}{};",
+            self.space0.value, self.source, self.space1.value
+        )
+    }
+}
 
 impl fmt::Display for Method {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -25,23 +164,226 @@ impl fmt::Display for Method {
     }
 }
 
-impl fmt::Display for Version {
+impl fmt::Display for MultilineString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.value)
+        let body = match &self.kind {
+            MultilineStringKind::Text(text)
+            | MultilineStringKind::Json(text)
+            | MultilineStringKind::Xml(text) => text.value.to_string(),
+            MultilineStringKind::GraphQl(graphql) => {
+                let var = match &graphql.variables {
+                    None => String::new(),
+                    Some(var) => {
+                        format!(
+                            "variables{}{}{}",
+                            var.space.value, var.value, var.whitespace.value
+                        )
+                    }
+                };
+                format!("{}{}", graphql.value, var)
+            }
+        };
+        write!(f, "{body}")
     }
 }
 
-impl fmt::Display for VersionValue {
+impl fmt::Display for MultilineStringAttribute {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            VersionValue::Version1 => "HTTP/1.0",
-            VersionValue::Version11 => "HTTP/1.1",
-            VersionValue::Version2 => "HTTP/2",
-            VersionValue::Version3 => "HTTP/3",
-            VersionValue::VersionAny => "HTTP",
-            VersionValue::VersionAnyLegacy => "HTTP/*",
-        };
-        write!(f, "{s}")
+        match self {
+            MultilineStringAttribute::Escape => write!(f, "escape"),
+            MultilineStringAttribute::NoVariable => write!(f, "novariable"),
+        }
+    }
+}
+
+impl fmt::Display for NaturalOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NaturalOption::Literal(v) => write!(f, "{}", v),
+            NaturalOption::Placeholder(v) => write!(f, "{}", v),
+        }
+    }
+}
+
+impl fmt::Display for Number {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Number::Float(value) => write!(f, "{}", value),
+            Number::Integer(value) => write!(f, "{}", value),
+            Number::BigInteger(value) => write!(f, "{}", value),
+        }
+    }
+}
+
+impl OptionKind {
+    /// Returns the Hurl string identifier of this option.
+    pub fn identifier(&self) -> &'static str {
+        match self {
+            OptionKind::AwsSigV4(_) => "aws-sigv4",
+            OptionKind::CaCertificate(_) => "cacert",
+            OptionKind::ClientCert(_) => "cert",
+            OptionKind::ClientKey(_) => "key",
+            OptionKind::Compressed(_) => "compressed",
+            OptionKind::ConnectTo(_) => "connect-to",
+            OptionKind::ConnectTimeout(_) => "connect-timeout",
+            OptionKind::Delay(_) => "delay",
+            OptionKind::FollowLocation(_) => "location",
+            OptionKind::FollowLocationTrusted(_) => "location-trusted",
+            OptionKind::Header(_) => "header",
+            OptionKind::Http10(_) => "http1.0",
+            OptionKind::Http11(_) => "http1.1",
+            OptionKind::Http2(_) => "http2",
+            OptionKind::Http3(_) => "http3",
+            OptionKind::Insecure(_) => "insecure",
+            OptionKind::IpV4(_) => "ipv4",
+            OptionKind::IpV6(_) => "ipv6",
+            OptionKind::LimitRate(_) => "limit-rate",
+            OptionKind::MaxRedirect(_) => "max-redirs",
+            OptionKind::NetRc(_) => "netrc",
+            OptionKind::NetRcFile(_) => "netrc-file",
+            OptionKind::NetRcOptional(_) => "netrc-optional",
+            OptionKind::Output(_) => "output",
+            OptionKind::PathAsIs(_) => "path-as-is",
+            OptionKind::Proxy(_) => "proxy",
+            OptionKind::Repeat(_) => "repeat",
+            OptionKind::Resolve(_) => "resolve",
+            OptionKind::Retry(_) => "retry",
+            OptionKind::RetryInterval(_) => "retry-interval",
+            OptionKind::Skip(_) => "skip",
+            OptionKind::UnixSocket(_) => "unix-socket",
+            OptionKind::User(_) => "user",
+            OptionKind::Variable(_) => "variable",
+            OptionKind::Verbose(_) => "verbose",
+            OptionKind::VeryVerbose(_) => "very-verbose",
+        }
+    }
+
+    /// Returns the string representation of this option.
+    pub fn value_as_str(&self) -> String {
+        match self {
+            OptionKind::AwsSigV4(value) => value.to_string(),
+            OptionKind::CaCertificate(filename) => filename.to_string(),
+            OptionKind::ClientCert(filename) => filename.to_string(),
+            OptionKind::ClientKey(filename) => filename.to_string(),
+            OptionKind::Compressed(value) => value.to_string(),
+            OptionKind::ConnectTo(value) => value.to_string(),
+            OptionKind::ConnectTimeout(value) => value.to_string(),
+            OptionKind::Delay(value) => value.to_string(),
+            OptionKind::FollowLocation(value) => value.to_string(),
+            OptionKind::FollowLocationTrusted(value) => value.to_string(),
+            OptionKind::Header(value) => value.to_string(),
+            OptionKind::Http10(value) => value.to_string(),
+            OptionKind::Http11(value) => value.to_string(),
+            OptionKind::Http2(value) => value.to_string(),
+            OptionKind::Http3(value) => value.to_string(),
+            OptionKind::Insecure(value) => value.to_string(),
+            OptionKind::IpV4(value) => value.to_string(),
+            OptionKind::IpV6(value) => value.to_string(),
+            OptionKind::LimitRate(value) => value.to_string(),
+            OptionKind::MaxRedirect(value) => value.to_string(),
+            OptionKind::NetRc(value) => value.to_string(),
+            OptionKind::NetRcFile(filename) => filename.to_string(),
+            OptionKind::NetRcOptional(value) => value.to_string(),
+            OptionKind::Output(filename) => filename.to_string(),
+            OptionKind::PathAsIs(value) => value.to_string(),
+            OptionKind::Proxy(value) => value.to_string(),
+            OptionKind::Repeat(value) => value.to_string(),
+            OptionKind::Resolve(value) => value.to_string(),
+            OptionKind::Retry(value) => value.to_string(),
+            OptionKind::RetryInterval(value) => value.to_string(),
+            OptionKind::Skip(value) => value.to_string(),
+            OptionKind::UnixSocket(value) => value.to_string(),
+            OptionKind::User(value) => value.to_string(),
+            OptionKind::Variable(VariableDefinition { name, value, .. }) => {
+                format!("{name}={value}")
+            }
+            OptionKind::Verbose(value) => value.to_string(),
+            OptionKind::VeryVerbose(value) => value.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for Placeholder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.expr)
+    }
+}
+
+impl PredicateFuncValue {
+    /// Returns the Hurl string identifier of this predicate.
+    pub fn identifier(&self) -> &'static str {
+        match self {
+            PredicateFuncValue::Equal { .. } => "==",
+            PredicateFuncValue::NotEqual { .. } => "!=",
+            PredicateFuncValue::GreaterThan { .. } => ">",
+            PredicateFuncValue::GreaterThanOrEqual { .. } => ">=",
+            PredicateFuncValue::LessThan { .. } => "<",
+            PredicateFuncValue::LessThanOrEqual { .. } => "<=",
+            PredicateFuncValue::StartWith { .. } => "startsWith",
+            PredicateFuncValue::EndWith { .. } => "endsWith",
+            PredicateFuncValue::Contain { .. } => "contains",
+            PredicateFuncValue::Include { .. } => "includes",
+            PredicateFuncValue::Match { .. } => "matches",
+            PredicateFuncValue::IsInteger => "isInteger",
+            PredicateFuncValue::IsFloat => "isFloat",
+            PredicateFuncValue::IsBoolean => "isBoolean",
+            PredicateFuncValue::IsString => "isString",
+            PredicateFuncValue::IsCollection => "isCollection",
+            PredicateFuncValue::IsDate => "isDate",
+            PredicateFuncValue::IsIsoDate => "isIsoDate",
+            PredicateFuncValue::Exist => "exists",
+            PredicateFuncValue::IsEmpty => "isEmpty",
+            PredicateFuncValue::IsNumber => "isNumber",
+        }
+    }
+}
+
+impl QueryValue {
+    /// Returns the Hurl string identifier of this query type.
+    pub fn identifier(&self) -> &'static str {
+        match self {
+            QueryValue::Status => "status",
+            QueryValue::Version => "version",
+            QueryValue::Url => "url",
+            QueryValue::Header { .. } => "header",
+            QueryValue::Cookie { .. } => "cookie",
+            QueryValue::Body => "body",
+            QueryValue::Xpath { .. } => "xpath",
+            QueryValue::Jsonpath { .. } => "jsonpath",
+            QueryValue::Regex { .. } => "regex",
+            QueryValue::Variable { .. } => "variable",
+            QueryValue::Duration => "duration",
+            QueryValue::Bytes => "bytes",
+            QueryValue::Sha256 => "sha256",
+            QueryValue::Md5 => "md5",
+            QueryValue::Certificate { .. } => "certificate",
+            QueryValue::Ip => "ip",
+        }
+    }
+}
+
+impl fmt::Display for Regex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl Section {
+    /// Returns the Hurl string identifier of this section.
+    pub fn identifier(&self) -> &'static str {
+        match self.value {
+            SectionValue::Asserts(_) => "Asserts",
+            SectionValue::QueryParams(_, true) => "Query",
+            SectionValue::QueryParams(_, false) => "QueryStringParams",
+            SectionValue::BasicAuth(_) => "BasicAuth",
+            SectionValue::FormParams(_, true) => "Form",
+            SectionValue::FormParams(_, false) => "FormParams",
+            SectionValue::Cookies(_) => "Cookies",
+            SectionValue::Captures(_) => "Captures",
+            SectionValue::MultipartFormData(_, true) => "Multipart",
+            SectionValue::MultipartFormData(_, false) => "MultipartFormData",
+            SectionValue::Options(_) => "Options",
+        }
     }
 }
 
@@ -74,125 +416,15 @@ impl fmt::Display for TemplateElement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
             TemplateElement::String { value, .. } => value.clone(),
-            TemplateElement::Expression(value) => format!("{{{{{value}}}}}"),
+            TemplateElement::Placeholder(value) => format!("{{{{{value}}}}}"),
         };
         write!(f, "{s}")
     }
 }
 
-impl fmt::Display for Number {
+impl fmt::Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Number::Float(value) => write!(f, "{}", value),
-            Number::Integer(value) => write!(f, "{}", value),
-            Number::BigInteger(value) => write!(f, "{}", value),
-        }
-    }
-}
-
-impl fmt::Display for Float {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.encoded)
-    }
-}
-
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.variable.name)
-    }
-}
-
-impl fmt::Display for CookiePath {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut buf = self.name.to_string();
-        if let Some(attribute) = &self.attribute {
-            let s = format!("[{attribute}]");
-            buf.push_str(s.as_str());
-        }
-        write!(f, "{buf}")
-    }
-}
-
-impl fmt::Display for CookieAttribute {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = match self.name {
-            CookieAttributeName::MaxAge(_) => "Max-Age",
-            CookieAttributeName::Value(_) => "Value",
-            CookieAttributeName::Expires(_) => "Expires",
-            CookieAttributeName::Domain(_) => "Domain",
-            CookieAttributeName::Path(_) => "Path",
-            CookieAttributeName::Secure(_) => "Secure",
-            CookieAttributeName::HttpOnly(_) => "HttpOnly",
-            CookieAttributeName::SameSite(_) => "SameSite",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl fmt::Display for Hex {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "hex,{}{}{};",
-            self.space0.value, self.encoded, self.space1.value
-        )
-    }
-}
-
-impl fmt::Display for Regex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.inner)
-    }
-}
-
-impl fmt::Display for MultilineString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let body = match self {
-            MultilineString::OneLineText(template) => template.to_string(),
-            MultilineString::Text(text)
-            | MultilineString::Json(text)
-            | MultilineString::Xml(text) => text.value.to_string(),
-            MultilineString::GraphQl(graphql) => {
-                let var = match &graphql.variables {
-                    None => String::new(),
-                    Some(var) => {
-                        format!(
-                            "variables{}{}{}",
-                            var.space.value, var.value, var.whitespace.value
-                        )
-                    }
-                };
-                format!("{}{}", graphql.value, var)
-            }
-        };
-        write!(f, "{body}")
-    }
-}
-
-impl fmt::Display for BooleanOption {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BooleanOption::Literal(v) => write!(f, "{}", v),
-            BooleanOption::Expression(v) => write!(f, "{}", v),
-        }
-    }
-}
-
-impl fmt::Display for NaturalOption {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            NaturalOption::Literal(v) => write!(f, "{}", v),
-            NaturalOption::Expression(v) => write!(f, "{}", v),
-        }
-    }
-}
-
-impl fmt::Display for RetryOption {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RetryOption::Literal(v) => write!(f, "{}", v),
-            RetryOption::Expression(v) => write!(f, "{}", v),
-        }
+        write!(f, "{}", self.name)
     }
 }
 
@@ -214,82 +446,31 @@ impl fmt::Display for VariableValue {
     }
 }
 
-impl PredicateFuncValue {
-    pub fn name(&self) -> String {
-        match self {
-            PredicateFuncValue::Equal { operator, .. } => {
-                if *operator {
-                    "==".to_string()
-                } else {
-                    "equals".to_string()
-                }
-            }
-            PredicateFuncValue::NotEqual { operator, .. } => {
-                if *operator {
-                    "!=".to_string()
-                } else {
-                    "notEquals".to_string()
-                }
-            }
-            PredicateFuncValue::GreaterThan { operator, .. } => {
-                if *operator {
-                    ">".to_string()
-                } else {
-                    "greaterThan".to_string()
-                }
-            }
-            PredicateFuncValue::GreaterThanOrEqual { operator, .. } => {
-                if *operator {
-                    ">=".to_string()
-                } else {
-                    "greaterThanOrEquals".to_string()
-                }
-            }
-            PredicateFuncValue::LessThan { operator, .. } => {
-                if *operator {
-                    "<".to_string()
-                } else {
-                    "lessThan".to_string()
-                }
-            }
-            PredicateFuncValue::LessThanOrEqual { operator, .. } => {
-                if *operator {
-                    "<=".to_string()
-                } else {
-                    "lessThanOrEquals".to_string()
-                }
-            }
-            PredicateFuncValue::StartWith { .. } => "startsWith".to_string(),
-            PredicateFuncValue::EndWith { .. } => "endsWith".to_string(),
-            PredicateFuncValue::Contain { .. } => "contains".to_string(),
-            PredicateFuncValue::Include { .. } => "includes".to_string(),
-            PredicateFuncValue::Match { .. } => "matches".to_string(),
-            PredicateFuncValue::IsInteger => "isInteger".to_string(),
-            PredicateFuncValue::IsFloat => "isFloat".to_string(),
-            PredicateFuncValue::IsBoolean => "isBoolean".to_string(),
-            PredicateFuncValue::IsString => "isString".to_string(),
-            PredicateFuncValue::IsCollection => "isCollection".to_string(),
-            PredicateFuncValue::IsDate => "isDate".to_string(),
-            PredicateFuncValue::Exist => "exists".to_string(),
-            PredicateFuncValue::IsEmpty => "isEmpty".to_string(),
-        }
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
     }
 }
 
-impl fmt::Display for Retry {
+impl fmt::Display for VersionValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            Retry::None => 0,
-            Retry::Finite(n) => *n as i32,
-            Retry::Infinite => -1,
+        let s = match self {
+            VersionValue::Version1 => "HTTP/1.0",
+            VersionValue::Version11 => "HTTP/1.1",
+            VersionValue::Version2 => "HTTP/2",
+            VersionValue::Version3 => "HTTP/3",
+            VersionValue::VersionAny => "HTTP",
         };
-        write!(f, "{}", value)
+        write!(f, "{s}")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{CookieAttributeName, SourceInfo, Whitespace};
+    use crate::reader::Pos;
+    use crate::typing::ToSource;
 
     fn whitespace() -> Whitespace {
         Whitespace {
@@ -298,11 +479,14 @@ mod tests {
         }
     }
 
-    fn variable_expr() -> Expr {
-        Expr {
+    fn variable_placeholder() -> Placeholder {
+        Placeholder {
             space0: whitespace(),
-            variable: Variable {
-                name: "name".to_string(),
+            expr: Expr {
+                kind: ExprKind::Variable(Variable {
+                    name: "name".to_string(),
+                    source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
+                }),
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             },
             space1: whitespace(),
@@ -315,52 +499,16 @@ mod tests {
             elements: vec![
                 TemplateElement::String {
                     value: "Hello ".to_string(),
-                    encoded: "Hello ".to_string(),
+                    source: "Hello ".to_source(),
                 },
-                TemplateElement::Expression(variable_expr()),
+                TemplateElement::Placeholder(variable_placeholder()),
                 TemplateElement::String {
                     value: "!".to_string(),
-                    encoded: "!".to_string(),
+                    source: "!".to_source(),
                 },
             ],
             source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
         }
-    }
-
-    #[test]
-    fn test_float() {
-        assert_eq!(
-            Float {
-                value: 1.0,
-                encoded: "1.0".to_string()
-            }
-            .to_string(),
-            "1.0"
-        );
-        assert_eq!(
-            Float {
-                value: 1.01,
-                encoded: "1.01".to_string()
-            }
-            .to_string(),
-            "1.01"
-        );
-        assert_eq!(
-            Float {
-                value: 1.01,
-                encoded: "1.010".to_string()
-            }
-            .to_string(),
-            "1.010"
-        );
-        assert_eq!(
-            Float {
-                value: -1.333,
-                encoded: "-1.333".to_string()
-            }
-            .to_string(),
-            "-1.333"
-        );
     }
 
     #[test]
@@ -376,7 +524,7 @@ mod tests {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "LSID".to_string(),
-                        encoded: "unused".to_string(),
+                        source: "unused".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                 },

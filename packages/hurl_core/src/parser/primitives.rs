@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,38 +15,40 @@
  * limitations under the License.
  *
  */
-use crate::ast::*;
-use crate::parser::combinators::*;
-use crate::parser::error::*;
-use crate::parser::reader::Reader;
-use crate::parser::string::*;
-use crate::parser::{base64, filename, key_string, ParseResult};
+use crate::ast::{
+    Base64, Comment, File, Hex, KeyValue, LineTerminator, Regex, SourceInfo, Whitespace,
+};
+use crate::combinator::{one_or_more, optional, recover, zero_or_more};
+use crate::parser::string::unquoted_template;
+use crate::parser::{base64, filename, key_string, ParseError, ParseErrorKind, ParseResult};
+use crate::reader::Reader;
+use crate::typing::ToSource;
 
 pub fn space(reader: &mut Reader) -> ParseResult<Whitespace> {
-    let start = reader.state;
+    let start = reader.cursor();
     match reader.read() {
-        None => Err(Error::new(start.pos, true, ParseError::Space)),
+        None => Err(ParseError::new(start.pos, true, ParseErrorKind::Space)),
         Some(c) => {
             if c == ' ' || c == '\t' {
                 Ok(Whitespace {
                     value: c.to_string(),
-                    source_info: SourceInfo::new(start.pos, reader.state.pos),
+                    source_info: SourceInfo::new(start.pos, reader.cursor().pos),
                 })
             } else {
-                Err(Error::new(start.pos, true, ParseError::Space))
+                Err(ParseError::new(start.pos, true, ParseErrorKind::Space))
             }
         }
     }
 }
 
 pub fn one_or_more_spaces(reader: &mut Reader) -> ParseResult<Whitespace> {
-    let start = reader.state;
+    let start = reader.cursor();
     match one_or_more(space, reader) {
         Ok(v) => {
             let s = v.iter().map(|x| x.value.clone()).collect();
             Ok(Whitespace {
                 value: s,
-                source_info: SourceInfo::new(start.pos, reader.state.pos),
+                source_info: SourceInfo::new(start.pos, reader.cursor().pos),
             })
         }
         Err(e) => Err(e),
@@ -54,14 +56,14 @@ pub fn one_or_more_spaces(reader: &mut Reader) -> ParseResult<Whitespace> {
 }
 
 pub fn zero_or_more_spaces(reader: &mut Reader) -> ParseResult<Whitespace> {
-    let start = reader.state;
+    let start = reader.cursor();
     match zero_or_more(space, reader) {
         //Ok(v) => return Ok(v.join("")),
         Ok(v) => {
             let s = v.iter().map(|x| x.value.clone()).collect();
             Ok(Whitespace {
                 value: s,
-                source_info: SourceInfo::new(start.pos, reader.state.pos),
+                source_info: SourceInfo::new(start.pos, reader.cursor().pos),
             })
         }
         Err(e) => Err(e),
@@ -69,22 +71,21 @@ pub fn zero_or_more_spaces(reader: &mut Reader) -> ParseResult<Whitespace> {
 }
 
 pub fn line_terminator(reader: &mut Reader) -> ParseResult<LineTerminator> {
-    // let start = p.state.clone();
     let space0 = zero_or_more_spaces(reader)?;
     let comment = optional(comment, reader)?;
     let nl = if reader.is_eof() {
         Whitespace {
             value: String::new(),
-            source_info: SourceInfo::new(reader.state.pos, reader.state.pos),
+            source_info: SourceInfo::new(reader.cursor().pos, reader.cursor().pos),
         }
     } else {
         match newline(reader) {
             Ok(r) => r,
             Err(e) => {
-                let inner = ParseError::Expecting {
+                let kind = ParseErrorKind::Expecting {
                     value: String::from("line_terminator"),
                 };
-                return Err(Error::new(e.pos, false, inner));
+                return Err(ParseError::new(e.pos, false, kind));
             }
         }
     };
@@ -102,53 +103,50 @@ pub fn optional_line_terminators(reader: &mut Reader) -> ParseResult<Vec<LineTer
 
 pub fn comment(reader: &mut Reader) -> ParseResult<Comment> {
     try_literal("#", reader)?;
-    let start = reader.state;
+    let start = reader.cursor();
     let mut value = String::new();
     loop {
         if reader.is_eof() {
             break;
         }
-        let save_state = reader.state;
+        let save_state = reader.cursor();
         match newline(reader) {
             Ok(_) => {
-                reader.state = save_state;
+                reader.seek(save_state);
                 break;
             }
             _ => {
-                reader.state = save_state;
+                reader.seek(save_state);
                 if let Some(c) = reader.read() {
-                    value.push(c)
+                    value.push(c);
                 }
             }
         }
     }
+    let end = reader.cursor();
     Ok(Comment {
         value,
-        source_info: SourceInfo {
-            start: start.pos,
-            end: reader.state.pos,
-        },
+        source_info: SourceInfo::new(start.pos, end.pos),
     })
 }
 
 /// Does not return a value, non recoverable parser. Use combinator recover to make it recoverable
 pub fn literal(s: &str, reader: &mut Reader) -> ParseResult<()> {
-    let start = reader.state;
+    let start = reader.cursor();
     for c in s.chars() {
-        let _state = reader.state;
         match reader.read() {
             None => {
-                let inner = ParseError::Expecting {
+                let kind = ParseErrorKind::Expecting {
                     value: s.to_string(),
                 };
-                return Err(Error::new(start.pos, false, inner));
+                return Err(ParseError::new(start.pos, false, kind));
             }
             Some(x) => {
                 if x != c {
-                    let inner = ParseError::Expecting {
+                    let kind = ParseErrorKind::Expecting {
                         value: s.to_string(),
                     };
-                    return Err(Error::new(start.pos, false, inner));
+                    return Err(ParseError::new(start.pos, false, kind));
                 } else {
                     continue;
                 }
@@ -160,54 +158,33 @@ pub fn literal(s: &str, reader: &mut Reader) -> ParseResult<()> {
 
 /// Recoverable version which reset the cursor, meant to be combined with following action.
 pub fn try_literal(s: &str, reader: &mut Reader) -> ParseResult<()> {
-    let save_state = reader.state;
+    let save_state = reader.cursor();
     match literal(s, reader) {
         Ok(_) => Ok(()),
         Err(e) => {
-            reader.state = save_state;
-            Err(Error::new(e.pos, true, e.inner))
-        }
-    }
-}
-
-/// Returns the literal string
-pub fn try_literals(s1: &str, s2: &str, reader: &mut Reader) -> ParseResult<String> {
-    let start = reader.state;
-    match literal(s1, reader) {
-        Ok(_) => Ok(s1.to_string()),
-        Err(_) => {
-            reader.state = start;
-            match literal(s2, reader) {
-                Ok(_) => Ok(s2.to_string()),
-                Err(_) => {
-                    reader.state = start;
-                    let inner = ParseError::Expecting {
-                        value: format!("<{s1}> or <{s2}>"),
-                    };
-                    Err(Error::new(start.pos, true, inner))
-                }
-            }
+            reader.seek(save_state);
+            Err(ParseError::new(e.pos, true, e.kind))
         }
     }
 }
 
 pub fn newline(reader: &mut Reader) -> ParseResult<Whitespace> {
-    let start = reader.state;
+    let start = reader.cursor();
     match try_literal("\r\n", reader) {
         Ok(_) => Ok(Whitespace {
             value: "\r\n".to_string(),
-            source_info: SourceInfo::new(start.pos, reader.state.pos),
+            source_info: SourceInfo::new(start.pos, reader.cursor().pos),
         }),
         Err(_) => match literal("\n", reader) {
             Ok(_) => Ok(Whitespace {
                 value: "\n".to_string(),
-                source_info: SourceInfo::new(start.pos, reader.state.pos),
+                source_info: SourceInfo::new(start.pos, reader.cursor().pos),
             }),
             Err(_) => {
-                let inner = ParseError::Expecting {
+                let kind = ParseErrorKind::Expecting {
                     value: String::from("newline"),
                 };
-                Err(Error::new(start.pos, false, inner))
+                Err(ParseError::new(start.pos, false, kind))
             }
         },
     }
@@ -238,10 +215,10 @@ pub fn hex(reader: &mut Reader) -> ParseResult<Hex> {
     literal(",", reader)?;
     let space0 = zero_or_more_spaces(reader)?;
     let mut value: Vec<u8> = vec![];
-    let start = reader.state.cursor;
+    let start = reader.cursor();
     let mut current: i32 = -1;
     loop {
-        let s = reader.state;
+        let s = reader.cursor();
         match hex_digit(reader) {
             Ok(d) => {
                 if current != -1 {
@@ -252,33 +229,33 @@ pub fn hex(reader: &mut Reader) -> ParseResult<Hex> {
                 }
             }
             Err(_) => {
-                reader.state = s;
+                reader.seek(s);
                 break;
             }
         };
     }
     if current != -1 {
-        return Err(Error::new(
-            reader.state.pos,
+        return Err(ParseError::new(
+            reader.cursor().pos,
             false,
-            ParseError::OddNumberOfHexDigits,
+            ParseErrorKind::OddNumberOfHexDigits,
         ));
     }
-    let encoded = reader.peek_back(start);
+    let source = reader.read_from(start.index).to_source();
     let space1 = zero_or_more_spaces(reader)?;
     literal(";", reader)?;
 
     Ok(Hex {
         space0,
         value,
-        encoded,
+        source,
         space1,
     })
 }
 
 pub fn regex(reader: &mut Reader) -> ParseResult<Regex> {
     try_literal("/", reader)?;
-    let start = reader.state.pos;
+    let start = reader.cursor();
     let mut s = String::new();
 
     // Hurl escaping /
@@ -290,10 +267,10 @@ pub fn regex(reader: &mut Reader) -> ParseResult<Regex> {
     loop {
         match reader.read() {
             None => {
-                let inner = ParseError::RegexExpr {
+                let kind = ParseErrorKind::RegexExpr {
                     message: "unexpected end of file".to_string(),
                 };
-                return Err(Error::new(reader.state.pos, false, inner));
+                return Err(ParseError::new(reader.cursor().pos, false, kind));
             }
             Some('/') => break,
             Some('\\') => {
@@ -331,7 +308,11 @@ pub fn regex(reader: &mut Reader) -> ParseResult<Regex> {
                 regex::Error::CompiledTooBig(_) => "Size limit exceeded".to_string(),
                 _ => "unknown".to_string(),
             };
-            Err(Error::new(start, false, ParseError::RegexExpr { message }))
+            Err(ParseError::new(
+                start.pos,
+                false,
+                ParseErrorKind::RegexExpr { message },
+            ))
         }
     }
 }
@@ -341,23 +322,23 @@ pub fn null(reader: &mut Reader) -> ParseResult<()> {
 }
 
 pub fn boolean(reader: &mut Reader) -> ParseResult<bool> {
-    let start = reader.state;
+    let start = reader.cursor();
     match try_literal("true", reader) {
         Ok(_) => Ok(true),
         Err(_) => match literal("false", reader) {
             Ok(_) => Ok(false),
             Err(_) => {
-                let inner = ParseError::Expecting {
+                let kind = ParseErrorKind::Expecting {
                     value: String::from("true|false"),
                 };
-                Err(Error::new(start.pos, true, inner))
+                Err(ParseError::new(start.pos, true, kind))
             }
         },
     }
 }
 
 pub(crate) fn file(reader: &mut Reader) -> ParseResult<File> {
-    let _start = reader.state;
+    let _start = reader.cursor();
     try_literal("file", reader)?;
     literal(",", reader)?;
     let space0 = zero_or_more_spaces(reader)?;
@@ -374,21 +355,20 @@ pub(crate) fn file(reader: &mut Reader) -> ParseResult<File> {
 pub(crate) fn base64(reader: &mut Reader) -> ParseResult<Base64> {
     // base64 => can have whitespace
     // support parser position
-    let _start = reader.state;
     try_literal("base64", reader)?;
     literal(",", reader)?;
     let space0 = zero_or_more_spaces(reader)?;
-    let save_state = reader.state;
+    let save_state = reader.cursor();
     let value = base64::parse(reader);
-    let count = reader.state.cursor - save_state.cursor;
-    reader.state = save_state;
-    let encoded = reader.read_n(count);
+    let count = reader.cursor().index - save_state.index;
+    reader.seek(save_state);
+    let source = reader.read_n(count).to_source();
     let space1 = zero_or_more_spaces(reader)?;
     literal(";", reader)?;
     Ok(Base64 {
         space0,
         value,
-        encoded,
+        source,
         space1,
     })
 }
@@ -397,10 +377,10 @@ pub fn eof(reader: &mut Reader) -> ParseResult<()> {
     if reader.is_eof() {
         Ok(())
     } else {
-        let inner = ParseError::Expecting {
+        let kind = ParseErrorKind::Expecting {
             value: String::from("eof"),
         };
-        Err(Error::new(reader.state.pos, false, inner))
+        Err(ParseError::new(reader.cursor().pos, false, kind))
     }
 }
 
@@ -427,27 +407,29 @@ pub fn hex_digit_value(c: char) -> Option<u32> {
 }
 
 pub fn hex_digit(reader: &mut Reader) -> ParseResult<u32> {
-    let start = reader.clone().state;
+    let start = reader.cursor();
     match reader.read() {
         Some(c) => match hex_digit_value(c) {
             Some(v) => Ok(v),
-            None => Err(Error::new(start.pos, true, ParseError::HexDigit)),
+            None => Err(ParseError::new(start.pos, true, ParseErrorKind::HexDigit)),
         },
-        None => Err(Error::new(start.pos, true, ParseError::HexDigit)),
+        None => Err(ParseError::new(start.pos, true, ParseErrorKind::HexDigit)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Pos;
+    use crate::ast::{Expr, ExprKind, Placeholder, Template, TemplateElement, Variable};
+    use crate::reader::Pos;
+    use crate::typing::ToSource;
 
     #[test]
     fn test_space() {
         let mut reader = Reader::new("x");
         let error = space(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 1 });
-        assert_eq!(reader.state.cursor, 1);
+        assert_eq!(reader.cursor().index, 1);
 
         let mut reader = Reader::new("  ");
         assert_eq!(
@@ -457,7 +439,7 @@ mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 2)),
             }),
         );
-        assert_eq!(reader.state.cursor, 1);
+        assert_eq!(reader.cursor().index, 1);
     }
 
     #[test]
@@ -486,7 +468,7 @@ mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 3)),
             })
         );
-        assert_eq!(reader.state.cursor, 2);
+        assert_eq!(reader.cursor().index, 2);
 
         let mut reader = Reader::new("xxx");
         assert_eq!(
@@ -496,7 +478,7 @@ mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
             })
         );
-        assert_eq!(reader.state.cursor, 0);
+        assert_eq!(reader.cursor().index, 0);
 
         let mut reader = Reader::new(" xxx");
         assert_eq!(
@@ -506,7 +488,7 @@ mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 2)),
             })
         );
-        assert_eq!(reader.state.cursor, 1);
+        assert_eq!(reader.cursor().index, 1);
     }
 
     #[test]
@@ -537,7 +519,7 @@ mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 2), Pos::new(1, 10)),
             })
         );
-        assert_eq!(reader.state.cursor, 9);
+        assert_eq!(reader.cursor().index, 9);
 
         let mut reader = Reader::new("xxx");
         let error = comment(&mut reader).err().unwrap();
@@ -549,40 +531,40 @@ mod tests {
     fn test_literal() {
         let mut reader = Reader::new("hello");
         assert_eq!(literal("hello", &mut reader), Ok(()));
-        assert_eq!(reader.state.cursor, 5);
+        assert_eq!(reader.cursor().index, 5);
 
         let mut reader = Reader::new("");
         let error = literal("hello", &mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 1 });
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: String::from("hello")
             }
         );
-        assert_eq!(reader.state.cursor, 0);
+        assert_eq!(reader.cursor().index, 0);
 
         let mut reader = Reader::new("hi");
         let error = literal("hello", &mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 1 });
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: String::from("hello")
             }
         );
-        assert_eq!(reader.state.cursor, 2);
+        assert_eq!(reader.cursor().index, 2);
 
         let mut reader = Reader::new("he");
         let error = literal("hello", &mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 1 });
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: String::from("hello")
             }
         );
-        assert_eq!(reader.state.cursor, 2);
+        assert_eq!(reader.cursor().index, 2);
     }
 
     #[test]
@@ -612,7 +594,7 @@ mod tests {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "message".to_string(),
-                        encoded: "message".to_string(),
+                        source: "message".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 8)),
                 },
@@ -629,15 +611,18 @@ mod tests {
                     elements: vec![
                         TemplateElement::String {
                             value: "hello ".to_string(),
-                            encoded: "hello ".to_string(),
+                            source: "hello ".to_source(),
                         },
-                        TemplateElement::Expression(Expr {
+                        TemplateElement::Placeholder(Placeholder {
                             space0: Whitespace {
                                 value: String::new(),
                                 source_info: SourceInfo::new(Pos::new(1, 18), Pos::new(1, 18)),
                             },
-                            variable: Variable {
-                                name: "name".to_string(),
+                            expr: Expr {
+                                kind: ExprKind::Variable(Variable {
+                                    name: "name".to_string(),
+                                    source_info: SourceInfo::new(Pos::new(1, 18), Pos::new(1, 22)),
+                                }),
                                 source_info: SourceInfo::new(Pos::new(1, 18), Pos::new(1, 22)),
                             },
                             space1: Whitespace {
@@ -647,7 +632,7 @@ mod tests {
                         }),
                         TemplateElement::String {
                             value: "!".to_string(),
-                            encoded: "!".to_string(),
+                            source: "!".to_source(),
                         },
                     ],
                     source_info: SourceInfo::new(Pos::new(1, 10), Pos::new(1, 25)),
@@ -683,13 +668,16 @@ mod tests {
                 },
                 key: Template {
                     delimiter: None,
-                    elements: vec![TemplateElement::Expression(Expr {
+                    elements: vec![TemplateElement::Placeholder(Placeholder {
                         space0: Whitespace {
                             value: String::new(),
                             source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 3)),
                         },
-                        variable: Variable {
-                            name: "key".to_string(),
+                        expr: Expr {
+                            kind: ExprKind::Variable(Variable {
+                                name: "key".to_string(),
+                                source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 6)),
+                            }),
                             source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 6))
                         },
                         space1: Whitespace {
@@ -711,13 +699,13 @@ mod tests {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "value".to_string(),
-                        encoded: "value".to_string(),
+                        source: "value".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(1, 10), Pos::new(1, 15)),
                 },
                 line_terminator0: LineTerminator {
                     space0: Whitespace {
-                        value: "".to_string(),
+                        value: String::new(),
                         source_info: SourceInfo::new(Pos::new(1, 15), Pos::new(1, 15)),
                     },
                     comment: None,
@@ -728,7 +716,7 @@ mod tests {
                 },
             }
         );
-        assert_eq!(reader.state.cursor, 14);
+        assert_eq!(reader.cursor().index, 14);
     }
 
     #[test]
@@ -737,13 +725,13 @@ mod tests {
         let error = key_value(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 6 });
         assert!(error.recoverable);
-        assert_eq!(reader.state.cursor, 5); // does not reset cursor
+        assert_eq!(reader.cursor().index, 5); // does not reset cursor
 
-        let mut reader = Reader::new("GET http://google.fr");
+        let mut reader = Reader::new("GET ®http://google.fr");
         let error = key_value(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 5 });
         assert!(error.recoverable);
-        assert_eq!(reader.state.cursor, 5); // does not reset cursor
+        assert_eq!(reader.cursor().index, 5); // does not reset cursor
     }
 
     #[test]
@@ -754,8 +742,8 @@ mod tests {
         let mut reader = Reader::new("xxx");
         let error = boolean(&mut reader).err().unwrap();
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: String::from("true|false")
             }
         );
@@ -764,8 +752,8 @@ mod tests {
         let mut reader = Reader::new("trux");
         let error = boolean(&mut reader).err().unwrap();
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: String::from("true|false")
             }
         );
@@ -780,7 +768,7 @@ mod tests {
         let mut reader = Reader::new("x");
         let error = hex_digit(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 1 });
-        assert_eq!(error.inner, ParseError::HexDigit);
+        assert_eq!(error.kind, ParseErrorKind::HexDigit);
         assert!(error.recoverable);
     }
 
@@ -795,7 +783,7 @@ mod tests {
                     source_info: SourceInfo::new(Pos::new(1, 5), Pos::new(1, 6)),
                 },
                 value: vec![255],
-                encoded: "ff".to_string(),
+                source: "ff".to_source(),
                 space1: Whitespace {
                     value: String::new(),
                     source_info: SourceInfo::new(Pos::new(1, 8), Pos::new(1, 8)),
@@ -812,7 +800,7 @@ mod tests {
                     source_info: SourceInfo::new(Pos::new(1, 5), Pos::new(1, 5)),
                 },
                 value: vec![1, 2, 3],
-                encoded: "010203".to_string(),
+                source: "010203".to_source(),
                 space1: Whitespace {
                     value: " ".to_string(),
                     source_info: SourceInfo::new(Pos::new(1, 11), Pos::new(1, 12)),
@@ -826,7 +814,7 @@ mod tests {
         let mut reader = Reader::new("hex,012;");
         let error = hex(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 8 });
-        assert_eq!(error.inner, ParseError::OddNumberOfHexDigits);
+        assert_eq!(error.kind, ParseErrorKind::OddNumberOfHexDigits);
     }
 
     #[test]
@@ -876,8 +864,8 @@ mod tests {
         assert_eq!(error.pos, Pos { line: 1, column: 5 });
         assert!(!error.recoverable);
         assert_eq!(
-            error.inner,
-            ParseError::RegexExpr {
+            error.kind,
+            ParseErrorKind::RegexExpr {
                 message: "unexpected end of file".to_string()
             }
         );
@@ -887,8 +875,8 @@ mod tests {
         assert_eq!(error.pos, Pos { line: 1, column: 2 });
         assert!(!error.recoverable);
         assert_eq!(
-            error.inner,
-            ParseError::RegexExpr {
+            error.kind,
+            ParseErrorKind::RegexExpr {
                 message: "repetition quantifier expects a valid decimal".to_string()
             }
         );
@@ -907,8 +895,8 @@ mod tests {
                 filename: Template {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
-                        value: String::from("data.xml"),
-                        encoded: String::from("data.xml"),
+                        value: "data.xml".to_string(),
+                        source: "data.xml".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(1, 6), Pos::new(1, 14)),
                 },
@@ -930,8 +918,8 @@ mod tests {
                 filename: Template {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
-                        value: String::from("filename1"),
-                        encoded: String::from("filename1"),
+                        value: "filename1".to_string(),
+                        source: "filename1".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(1, 7), Pos::new(1, 16)),
                 },
@@ -953,8 +941,8 @@ mod tests {
                 filename: Template {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
-                        value: String::from("tmp/filename1"),
-                        encoded: String::from("tmp/filename1"),
+                        value: "tmp/filename1".to_string(),
+                        source: "tmp/filename1".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(1, 7), Pos::new(1, 20)),
                 },
@@ -975,8 +963,8 @@ mod tests {
                 },
                 filename: Template {
                     elements: vec![TemplateElement::String {
-                        value: String::from("tmp/filename with spaces.txt"),
-                        encoded: String::from("tmp/filename\\ with\\ spaces.txt"),
+                        value: "tmp/filename with spaces.txt".to_string(),
+                        source: "tmp/filename\\ with\\ spaces.txt".to_source(),
                     }],
                     delimiter: None,
                     source_info: SourceInfo::new(Pos::new(1, 7), Pos::new(1, 37)),
@@ -1007,8 +995,8 @@ mod tests {
         );
         assert!(!error.recoverable);
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: String::from(";")
             }
         );
@@ -1024,8 +1012,8 @@ mod tests {
         );
         assert!(!error.recoverable);
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: String::from(";")
             }
         );
@@ -1042,13 +1030,13 @@ mod tests {
                     source_info: SourceInfo::new(Pos::new(1, 8), Pos::new(1, 10)),
                 },
                 value: vec![77, 97],
-                encoded: String::from("T WE="),
+                source: "T WE=".to_source(),
                 space1: Whitespace {
                     value: String::new(),
                     source_info: SourceInfo::new(Pos::new(1, 15), Pos::new(1, 15)),
                 },
             }
         );
-        assert_eq!(reader.state.cursor, 15);
+        assert_eq!(reader.cursor().index, 15);
     }
 }

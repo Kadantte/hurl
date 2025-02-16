@@ -14,12 +14,13 @@ Examples:
     $ python3 bin/docs/build_readme.py crates > packages/hurl/README.md
 
 """
+
 import os
 import re
 import sys
 from pathlib import Path
 
-from markdown import parse_markdown, MarkdownDoc
+from markdown import MarkdownDoc, parse_markdown
 
 
 def build_home_md(text: str) -> MarkdownDoc:
@@ -86,7 +87,11 @@ def replace(text: str, dest: str) -> str:
 [![documentation](https://img.shields.io/badge/-documentation-ff0288)](https://hurl.dev)
 """,
             """\
-<img src="https://hurl.dev/assets/img/logo-light.svg" width="264px" alt="Hurl Logo">
+<picture>
+    <source media="(prefers-color-scheme: light)" srcset="https://hurl.dev/assets/img/logo-light.svg" > 
+    <source media="(prefers-color-scheme: dark)" srcset="https://hurl.dev/assets/img/logo-dark.svg" > 
+    <img src="https://hurl.dev/assets/img/logo-light.svg" width="264px" alt="Hurl Logo">
+</picture>
 
 [![deploy status](https://github.com/Orange-OpenSource/hurl/workflows/test/badge.svg)](https://github.com/Orange-OpenSource/hurl/actions)
 [![coverage](https://Orange-OpenSource.github.io/hurl/coverage/badges/flat.svg)](https://Orange-OpenSource.github.io/hurl/coverage)
@@ -96,9 +101,9 @@ def replace(text: str, dest: str) -> str:
         ),
         (
             """<div id="home-demo"></div>""",
-            """<a href="https://hurl.dev/player.html?id=hurl&speed=3"><img src="/docs/assets/img/poster-hurl.png" width="100%" alt="Hurl Demo"/></a>
+            """<a href="https://hurl.dev/player.html?id=starwars&speed=3"><img src="/docs/assets/img/poster-starwars.png" width="100%" alt="Hurl Demo"/></a>
 """,
-            """<a href="https://hurl.dev/player.html?id=hurl&speed=3"><img src="https://hurl.dev/assets/img/poster-hurl.png" width="100%" alt="Hurl Demo"/></a>
+            """<a href="https://hurl.dev/player.html?id=starwars&speed=3"><img src="https://hurl.dev/assets/img/poster-starwars.png" width="100%" alt="Hurl Demo"/></a>
 """,
         ),
         (
@@ -126,8 +131,28 @@ def replace(text: str, dest: str) -> str:
 </picture>
 """,
             """\
-<img src="https://hurl.dev/assets/img/home-waterfall-light.png" width="480" alt="HTML report"/>
+<picture>
+    <source media="(prefers-color-scheme: light)" srcset="https://hurl.dev/assets/img/home-waterfall-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="https://hurl.dev/assets/img/home-waterfall-dark.png">
+    <img src="https://hurl.dev/assets/img/home-waterfall-light.png" width="480" alt="HTML report"/>
+</picture>
 """,
+        ),
+        # TODO: extract version from Cargo.toml
+        (
+            "[HTML]: /docs/standalone/hurl-6.0.0.html",
+            "[HTML]: /docs/standalone/hurl-6.0.0.html",
+            "[HTML]: https://hurl.dev/assets/docs/hurl-6.0.0.html.gz",
+        ),
+        (
+            "[PDF]: /docs/standalone/hurl-6.0.0.pdf",
+            "[PDF]: /docs/standalone/hurl-6.0.0.pdf",
+            "[PDF]: https://hurl.dev/assets/docs/hurl-6.0.0.pdf.gz",
+        ),
+        (
+            "[Markdown]: https://hurl.dev/docs/standalone/hurl-6.0.0.html",
+            "[Markdown]: /docs/standalone/hurl-6.0.0.md",
+            "[Markdown]: https://hurl.dev/assets/docs/hurl-6.0.0.md.gz",
         ),
     ]
     for old, new_for_github, new_for_crates in snippets:

@@ -1,5 +1,5 @@
 from app import app
-from flask import request, redirect, Response
+from flask import Response, redirect, request
 
 
 @app.route("/follow-redirect", methods=["GET", "POST"])
@@ -31,6 +31,7 @@ def followed_redirect():
 
 @app.route("/followed-redirect-post", methods=["POST"])
 def followed_redirect_post():
+    assert request.headers["Accept"] == "text/plain"
     return "Followed redirect POST!"
 
 
@@ -41,13 +42,23 @@ def follow_redirect_308():
 
 @app.route("/follow-redirect-basic-auth")
 def follow_redirect_basic_auth():
-    return redirect("http://127.0.0.1:8000/followed-redirect-basic-auth")
+    assert "Authorization" in request.headers
+    change_host = request.args.get("change_host") == "true"
+    if change_host:
+        return redirect("http://127.0.0.1:8000/followed-redirect-basic-auth")
+    else:
+        return redirect("http://localhost:8000/followed-redirect-basic-auth")
 
 
 @app.route("/followed-redirect-basic-auth")
 def followed_redirect_basic_auth():
-    assert "Authorization" not in request.headers
-    return "Followed redirect Basic Auth!"
+    # When host changes, authorization should be filtered
+    if request.headers["Host"] == "localhost:8000":
+        assert "Authorization" in request.headers
+        return "Followed redirect with Authorization header!"
+    else:
+        assert "Authorization" not in request.headers
+        return "Followed redirect without Authorization header!"
 
 
 @app.route("/follow-redirect-basic-auth-trusted")
@@ -59,3 +70,14 @@ def follow_redirect_basic_auth_trusted():
 def followed_redirect_basic_auth_trusted():
     assert request.headers["Authorization"] == "Basic Ym9iQGVtYWlsLmNvbTpzZWNyZXQ="
     return "Followed redirect Basic Auth!"
+
+
+@app.route("/follow-redirect/relative/foo")
+def follow_redirect_relative():
+    return redirect("../bar")
+
+
+@app.route("/follow-redirect/bar")
+def followed_redirect_bar():
+    assert request.headers["Accept"] == "text/plain"
+    return "Followed relative redirect!"

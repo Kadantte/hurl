@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,13 +17,16 @@
  */
 use std::time::Duration;
 
-use hurl_core::ast::{Entry, Retry};
+use hurl_core::ast::Entry;
+use hurl_core::typing::{BytesPerSec, Count};
 
 use crate::http::{IpResolve, RequestedHttpVersion};
 use crate::runner::Output;
 use crate::util::path::ContextDir;
 
+/// Build a [`RunnerOptions`] instance.
 pub struct RunnerOptionsBuilder {
+    allow_reuse: bool,
     aws_sigv4: Option<String>,
     cacert_file: Option<String>,
     client_cert_file: Option<String>,
@@ -37,11 +40,16 @@ pub struct RunnerOptionsBuilder {
     delay: Duration,
     follow_location: bool,
     follow_location_trusted: bool,
+    from_entry: Option<usize>,
+    headers: Vec<String>,
     http_version: RequestedHttpVersion,
     ignore_asserts: bool,
     insecure: bool,
     ip_resolve: IpResolve,
-    max_redirect: Option<usize>,
+    max_filesize: Option<u64>,
+    max_recv_speed: Option<BytesPerSec>,
+    max_redirect: Count,
+    max_send_speed: Option<BytesPerSec>,
     netrc: bool,
     netrc_file: Option<String>,
     netrc_optional: bool,
@@ -49,10 +57,11 @@ pub struct RunnerOptionsBuilder {
     output: Option<Output>,
     path_as_is: bool,
     post_entry: Option<fn() -> bool>,
-    pre_entry: Option<fn(Entry) -> bool>,
+    pre_entry: Option<fn(&Entry) -> bool>,
     proxy: Option<String>,
+    repeat: Option<Count>,
     resolves: Vec<String>,
-    retry: Retry,
+    retry: Option<Count>,
     retry_interval: Duration,
     skip: bool,
     ssl_no_revoke: bool,
@@ -66,6 +75,7 @@ pub struct RunnerOptionsBuilder {
 impl Default for RunnerOptionsBuilder {
     fn default() -> Self {
         RunnerOptionsBuilder {
+            allow_reuse: true,
             aws_sigv4: None,
             cacert_file: None,
             client_cert_file: None,
@@ -79,11 +89,16 @@ impl Default for RunnerOptionsBuilder {
             delay: Duration::from_millis(0),
             follow_location: false,
             follow_location_trusted: false,
+            from_entry: None,
+            headers: vec![],
             http_version: RequestedHttpVersion::default(),
             ignore_asserts: false,
             insecure: false,
             ip_resolve: IpResolve::default(),
-            max_redirect: Some(50),
+            max_filesize: None,
+            max_recv_speed: None,
+            max_redirect: Count::Finite(50),
+            max_send_speed: None,
             netrc: false,
             netrc_file: None,
             netrc_optional: false,
@@ -93,8 +108,9 @@ impl Default for RunnerOptionsBuilder {
             post_entry: None,
             pre_entry: None,
             proxy: None,
+            repeat: None,
             resolves: vec![],
-            retry: Retry::None,
+            retry: None,
             retry_interval: Duration::from_millis(1000),
             skip: false,
             ssl_no_revoke: false,
@@ -111,6 +127,17 @@ impl RunnerOptionsBuilder {
     /// Returns a new Hurl runner options builder with a default values.
     pub fn new() -> Self {
         RunnerOptionsBuilder::default()
+    }
+
+    /// Allow reusing internal connections, `true` by default. Setting this to `false` forces the
+    /// HTTP client to use a new HTTP connection, and also marks this new connection as not reusable.
+    /// The main use-case for not allowing connection reuse is when we want to switch HTTP version
+    /// mid-file with an `[Options]` section. As the HTTP version setter is just a query, and is not
+    /// always honored by libcurl when reusing connection, this allows to be sure that the client
+    /// will set the queried HTTP version.
+    pub fn allow_reuse(&mut self, allow_reuse: bool) -> &mut Self {
+        self.allow_reuse = allow_reuse;
+        self
     }
 
     /// Specifies the AWS SigV4 option
@@ -218,6 +245,18 @@ impl RunnerOptionsBuilder {
         self
     }
 
+    /// Executes Hurl file from `from_entry` (starting at 1), ignores the beginning of the file.
+    pub fn from_entry(&mut self, from_entry: Option<usize>) -> &mut Self {
+        self.from_entry = from_entry;
+        self
+    }
+
+    /// Sets additional headers (overrides if a header already exists).
+    pub fn headers(&mut self, header: &[String]) -> &mut Self {
+        self.headers = header.to_vec();
+        self
+    }
+
     /// Set requested HTTP version (can be different of the effective HTTP version).
     pub fn http_version(&mut self, version: RequestedHttpVersion) -> &mut Self {
         self.http_version = version;
@@ -242,11 +281,29 @@ impl RunnerOptionsBuilder {
         self
     }
 
+    /// Set the file size limit
+    pub fn max_filesize(&mut self, max_filesize: Option<u64>) -> &mut Self {
+        self.max_filesize = max_filesize;
+        self
+    }
+
     /// Set maximum number of redirection-followings allowed
     ///
     /// By default, the limit is set to 50 redirections
-    pub fn max_redirect(&mut self, max_redirect: Option<usize>) -> &mut Self {
+    pub fn max_redirect(&mut self, max_redirect: Count) -> &mut Self {
         self.max_redirect = max_redirect;
+        self
+    }
+
+    /// Set the maximum upload speed.
+    pub fn max_send_speed(&mut self, max_send_speed: Option<BytesPerSec>) -> &mut Self {
+        self.max_send_speed = max_send_speed;
+        self
+    }
+
+    /// Set the maximum download speed.
+    pub fn max_recv_speed(&mut self, max_recv_speed: Option<BytesPerSec>) -> &mut Self {
+        self.max_recv_speed = max_recv_speed;
         self
     }
 
@@ -297,7 +354,7 @@ impl RunnerOptionsBuilder {
     /// Sets function to be executed before each entry execution.
     ///
     /// If the function returns true, the run is stopped.
-    pub fn pre_entry(&mut self, pre_entry: Option<fn(Entry) -> bool>) -> &mut Self {
+    pub fn pre_entry(&mut self, pre_entry: Option<fn(&Entry) -> bool>) -> &mut Self {
         self.pre_entry = pre_entry;
         self
     }
@@ -305,6 +362,12 @@ impl RunnerOptionsBuilder {
     /// Sets the specified proxy to be used.
     pub fn proxy(&mut self, proxy: Option<String>) -> &mut Self {
         self.proxy = proxy;
+        self
+    }
+
+    /// Set the number of repetition for a given entry.
+    pub fn repeat(&mut self, repeat: Option<Count>) -> &mut Self {
+        self.repeat = repeat;
         self
     }
 
@@ -317,7 +380,7 @@ impl RunnerOptionsBuilder {
     /// Sets maximum number of retries.
     ///
     /// Default is 0.
-    pub fn retry(&mut self, retry: Retry) -> &mut Self {
+    pub fn retry(&mut self, retry: Option<Count>) -> &mut Self {
         self.retry = retry;
         self
     }
@@ -330,6 +393,13 @@ impl RunnerOptionsBuilder {
         self
     }
 
+    /// Skip the run without executing any request.
+    pub fn skip(&mut self, skip: bool) -> &mut Self {
+        self.skip = skip;
+        self
+    }
+
+    /// Disables certificate revocation checks for SSL backends where such behavior is present.
     pub fn ssl_no_revoke(&mut self, ssl_no_revoke: bool) -> &mut Self {
         self.ssl_no_revoke = ssl_no_revoke;
         self
@@ -370,6 +440,7 @@ impl RunnerOptionsBuilder {
     /// Create an instance of [`RunnerOptions`].
     pub fn build(&self) -> RunnerOptions {
         RunnerOptions {
+            allow_reuse: self.allow_reuse,
             aws_sigv4: self.aws_sigv4.clone(),
             cacert_file: self.cacert_file.clone(),
             client_cert_file: self.client_cert_file.clone(),
@@ -383,11 +454,16 @@ impl RunnerOptionsBuilder {
             cookie_input_file: self.cookie_input_file.clone(),
             follow_location: self.follow_location,
             follow_location_trusted: self.follow_location_trusted,
+            from_entry: self.from_entry,
+            headers: self.headers.clone(),
             http_version: self.http_version,
             ignore_asserts: self.ignore_asserts,
             insecure: self.insecure,
             ip_resolve: self.ip_resolve,
+            max_filesize: self.max_filesize,
+            max_recv_speed: self.max_recv_speed,
             max_redirect: self.max_redirect,
+            max_send_speed: self.max_send_speed,
             netrc: self.netrc,
             netrc_file: self.netrc_file.clone(),
             netrc_optional: self.netrc_optional,
@@ -397,6 +473,7 @@ impl RunnerOptionsBuilder {
             post_entry: self.post_entry,
             pre_entry: self.pre_entry,
             proxy: self.proxy.clone(),
+            repeat: self.repeat,
             resolves: self.resolves.clone(),
             retry: self.retry,
             retry_interval: self.retry_interval,
@@ -411,44 +488,99 @@ impl RunnerOptionsBuilder {
     }
 }
 
+/// Represents the configuration options to run an Hurl file.
+///
+/// Most options are used to configure the HTTP client used for running requests, while other
+/// are used to configure asserts settings, output etc....
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunnerOptions {
+    /// Allow reusing internal connections.
+    pub(crate) allow_reuse: bool,
+    /// Specifies the AWS SigV4 option.
     pub(crate) aws_sigv4: Option<String>,
+    /// Specifies the certificate file for peer verification.
     pub(crate) cacert_file: Option<String>,
+    /// Sets Client certificate file and password.
     pub(crate) client_cert_file: Option<String>,
+    /// Sets private key file name.
     pub(crate) client_key_file: Option<String>,
+    /// Requests a compressed response using one of the algorithms br, gzip, deflate and
+    /// automatically decompress the content.
     pub(crate) compressed: bool,
+    /// Sets maximum time that you allow Hurl’s connection to take.
     pub(crate) connect_timeout: Duration,
+    /// Sets hosts mappings.
     pub(crate) connects_to: Vec<String>,
+    /// Sets delay (timeout) before the request.
     pub(crate) delay: Duration,
+    /// Sets root file system to import files in Hurl.
     pub(crate) context_dir: ContextDir,
+    /// Sets stopping or continuing executing requests to the end of the Hurl file even when an error occurs.
     pub(crate) continue_on_error: bool,
+    /// Reads cookies from this file (using the Netscape cookie file format).
     pub(crate) cookie_input_file: Option<String>,
+    /// Sets follow redirect.
     pub(crate) follow_location: bool,
+    /// Sets follow redirect with trust.
     pub(crate) follow_location_trusted: bool,
+    /// Executes Hurl file from from_entry (starting at 1), ignores the beginning of the file.
+    pub(crate) from_entry: Option<usize>,
+    /// Sets additional headers (overrides if a header already exists).
+    pub(crate) headers: Vec<String>,
+    /// Set requested HTTP version (can be different of the effective HTTP version).
     pub(crate) http_version: RequestedHttpVersion,
+    /// Ignores all asserts defined in the Hurl file.
     pub(crate) ignore_asserts: bool,
+    /// Set IP version.
     pub(crate) ip_resolve: IpResolve,
+    /// Allows Hurl to perform “insecure” SSL connections and transfers.
     pub(crate) insecure: bool,
-    pub(crate) max_redirect: Option<usize>,
+    /// Set the file size limit.
+    pub(crate) max_filesize: Option<u64>,
+    /// Set the maximum download speed.
+    pub(crate) max_recv_speed: Option<BytesPerSec>,
+    /// Set maximum number of redirection-followings allowed.
+    pub(crate) max_redirect: Count,
+    /// Set the maximum upload speed.
+    pub(crate) max_send_speed: Option<BytesPerSec>,
+    /// Sets the netrc flag.
     pub(crate) netrc: bool,
+    /// Sets the netrc file.
     pub(crate) netrc_file: Option<String>,
+    /// Sets the optional netrc flag.
     pub(crate) netrc_optional: bool,
+    /// Sets list of hosts which do not use a proxy.
     pub(crate) no_proxy: Option<String>,
+    /// Specifies the file to output the HTTP response.
     pub(crate) output: Option<Output>,
     pub(crate) path_as_is: bool,
+    /// Sets function to be executed before each entry execution.
     pub(crate) post_entry: Option<fn() -> bool>,
-    pub(crate) pre_entry: Option<fn(Entry) -> bool>,
+    /// Sets function to be executed after each entry execution.
+    pub(crate) pre_entry: Option<fn(&Entry) -> bool>,
+    /// Sets the specified proxy to be used.
     pub(crate) proxy: Option<String>,
+    /// Set the number of repetition for a given entry.
+    pub(crate) repeat: Option<Count>,
+    /// Provides a custom address for a specific host and port pair.
     pub(crate) resolves: Vec<String>,
-    pub(crate) retry: Retry,
+    /// Sets maximum number of retries.
+    pub(crate) retry: Option<Count>,
+    /// Sets duration between each retry.
     pub(crate) retry_interval: Duration,
+    /// Skip the run without executing any request.
     pub(crate) skip: bool,
+    /// Disables certificate revocation checks for SSL backends where such behavior is present.
     pub(crate) ssl_no_revoke: bool,
+    /// Sets maximum time allowed for the transfer.
     pub(crate) timeout: Duration,
+    /// Executes Hurl file to to_entry (starting at 1), ignores the remaining of the file.
     pub(crate) to_entry: Option<usize>,
+    /// Sets the specified unix domain socket to connect through, instead of using the network.
     pub(crate) unix_socket: Option<String>,
+    /// Adds basic Authentication header to each request.
     pub(crate) user: Option<String>,
+    /// Specifies the User-Agent string to send to the HTTP server.
     pub(crate) user_agent: Option<String>,
 }
 

@@ -1,8 +1,9 @@
 name: coverage
 
 on:
-  schedule:
-    - cron: "0 8 * * *"
+  push:
+    branches:
+      - master
   workflow_dispatch:
 
 env:
@@ -16,13 +17,20 @@ jobs:
         rust: [stable]
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4.1.1
-
-    - name: Environment
-      run: bin/environment.sh
+      uses: actions/checkout@v4.2.2
+      with:
+        persist-credentials: false
 
     - name: Install Prerequisites
       run: bin/install_prerequisites_ubuntu.sh
+
+    - name: Install Python 3.11
+      uses: actions/setup-python@v5.4.0
+      with:
+        python-version: '3.11'
+
+    - name: Tests prerequisites
+      run: bin/test/test_prerequisites.sh
 
     - name: Install Rust
       run: bin/install_rust.sh
@@ -30,17 +38,17 @@ jobs:
     - name: Install Grcov
       run: bin/install_grcov.sh
 
+    - name: Environment
+      run: bin/environment.sh
+
     - name: Build
       run: cargo build
-
-    - name: Test Prerequisites
-      run: bin/test/test_prerequisites.sh
 
     - name: Run Coverage
       run: bin/coverage_run.sh
 
     - name: Init git bot context
-      uses: crazy-max/ghaction-import-gpg@v6.1.0
+      uses: crazy-max/ghaction-import-gpg@v6.2.0
       with:
         gpg_private_key: ${{ secrets.HURL_BOT_GPG_PRIVATE_KEY }}
         passphrase: ${{ secrets.HURL_BOT_GPG_PRIVATE_KEY_PASSPHRASE }}
@@ -50,7 +58,7 @@ jobs:
         git_commit_gpgsign: true
 
     - name: Deploy GitHub Pages
-      uses: peaceiris/actions-gh-pages@v3.9.3
+      uses: peaceiris/actions-gh-pages@v4.0.0
       with:
         personal_token: ${{ secrets.HURL_BOT_TOKEN }}
         user_name: 'hurl-bot'
@@ -60,7 +68,7 @@ jobs:
         destination_dir: coverage
 
     - name: Archive Artifacts
-      uses: actions/upload-artifact@v4.3.1
+      uses: actions/upload-artifact@v4.6.0
       if: ${{ always() }}
       with:
         name: coverage

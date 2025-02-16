@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,6 @@
  * limitations under the License.
  *
  */
-pub use rules::{check_hurl_file, lint_hurl_file};
+pub use rules::lint_hurl_file;
 
-pub use self::core::{Error, LinterError};
-mod core;
-mod error;
 mod rules;

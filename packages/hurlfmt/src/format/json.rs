@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,9 +17,17 @@
  */
 use base64::engine::general_purpose;
 use base64::Engine;
-use hurl_core::ast::*;
+use hurl_core::ast::{
+    Assert, Base64, Body, BooleanOption, Bytes, Capture, CertificateAttributeName, Comment, Cookie,
+    CountOption, DurationOption, Entry, EntryOption, File, FileParam, Filter, FilterValue, Header,
+    Hex, HurlFile, JsonListElement, JsonValue, KeyValue, MultilineString, MultilineStringKind,
+    MultipartParam, NaturalOption, OptionKind, Placeholder, Predicate, PredicateFuncValue,
+    PredicateValue, Query, QueryValue, Regex, RegexValue, Request, Response, StatusValue,
+    VersionValue,
+};
+use hurl_core::typing::{Count, Duration};
 
-use super::serialize_json::*;
+use crate::format::serialize_json::JValue;
 
 pub fn format(hurl_file: &HurlFile) -> String {
     hurl_file.to_json().format()
@@ -90,6 +98,18 @@ impl ToJson for Request {
         if let Some(body) = &self.body {
             attributes.push(("body".to_string(), body.to_json()));
         }
+
+        // Request comments (can be used to check custom commands)
+        let comments: Vec<_> = self
+            .line_terminators
+            .iter()
+            .filter_map(|l| l.comment.as_ref())
+            .collect();
+        if !comments.is_empty() {
+            let comments = comments.iter().map(|c| c.to_json()).collect();
+            attributes.push(("comments".to_string(), JValue::List(comments)));
+        }
+
         JValue::Object(attributes)
     }
 }
@@ -99,7 +119,7 @@ impl ToJson for Response {
     fn to_json(&self) -> JValue {
         let mut attributes = vec![];
         if let Some(v) = get_json_version(&self.version.value) {
-            attributes.push(("version".to_string(), JValue::String(v)))
+            attributes.push(("version".to_string(), JValue::String(v)));
         }
         if let StatusValue::Specific(n) = self.status.value {
             attributes.push(("status".to_string(), JValue::Number(n.to_string())));
@@ -123,7 +143,7 @@ impl ToJson for Response {
 fn add_headers(attributes: &mut Vec<(String, JValue)>, headers: &[Header]) {
     if !headers.is_empty() {
         let headers = JValue::List(headers.iter().map(|h| h.to_json()).collect());
-        attributes.push(("headers".to_string(), headers))
+        attributes.push(("headers".to_string(), headers));
     }
 }
 
@@ -168,10 +188,22 @@ impl ToJson for Bytes {
                 // base64,SGVsbG8gd29ybGQ=;
                 // ~~~
                 let lang = match multi {
-                    MultilineString::OneLineText(_) | MultilineString::Text(_) => "text",
-                    MultilineString::Json(_) => "json",
-                    MultilineString::Xml(_) => "xml",
-                    MultilineString::GraphQl(_) => "graphql",
+                    MultilineString {
+                        kind: MultilineStringKind::Text(_),
+                        ..
+                    } => "text",
+                    MultilineString {
+                        kind: MultilineStringKind::Json(_),
+                        ..
+                    } => "json",
+                    MultilineString {
+                        kind: MultilineStringKind::Xml(_),
+                        ..
+                    } => "xml",
+                    MultilineString {
+                        kind: MultilineStringKind::GraphQl(_),
+                        ..
+                    } => "graphql",
                 };
                 JValue::Object(vec![
                     ("type".to_string(), JValue::String(lang.to_string())),
@@ -221,7 +253,6 @@ fn get_json_version(version_value: &VersionValue) -> Option<String> {
         VersionValue::Version2 => Some("HTTP/2".to_string()),
         VersionValue::Version3 => Some("HTTP/3".to_string()),
         VersionValue::VersionAny => None,
-        VersionValue::VersionAnyLegacy => None,
     }
 }
 
@@ -272,13 +303,6 @@ impl ToJson for Cookie {
 
 impl ToJson for EntryOption {
     fn to_json(&self) -> JValue {
-        let mut attributes = vec![];
-
-        let name = "name".to_string();
-        let value = JValue::String(self.kind.name().to_string());
-        attributes.push((name, value));
-
-        let name = "value".to_string();
         let value = match &self.kind {
             OptionKind::AwsSigV4(value) => JValue::String(value.to_string()),
             OptionKind::CaCertificate(filename) => JValue::String(filename.to_string()),
@@ -286,9 +310,11 @@ impl ToJson for EntryOption {
             OptionKind::ClientKey(filename) => JValue::String(filename.to_string()),
             OptionKind::Compressed(value) => value.to_json(),
             OptionKind::ConnectTo(value) => JValue::String(value.to_string()),
+            OptionKind::ConnectTimeout(value) => value.to_json(),
             OptionKind::Delay(value) => value.to_json(),
             OptionKind::FollowLocation(value) => value.to_json(),
             OptionKind::FollowLocationTrusted(value) => value.to_json(),
+            OptionKind::Header(value) => JValue::String(value.to_string()),
             OptionKind::Http10(value) => value.to_json(),
             OptionKind::Http11(value) => value.to_json(),
             OptionKind::Http2(value) => value.to_json(),
@@ -296,6 +322,7 @@ impl ToJson for EntryOption {
             OptionKind::Insecure(value) => value.to_json(),
             OptionKind::IpV4(value) => value.to_json(),
             OptionKind::IpV6(value) => value.to_json(),
+            OptionKind::LimitRate(value) => value.to_json(),
             OptionKind::MaxRedirect(value) => value.to_json(),
             OptionKind::NetRc(value) => value.to_json(),
             OptionKind::NetRcFile(filename) => JValue::String(filename.to_string()),
@@ -303,19 +330,38 @@ impl ToJson for EntryOption {
             OptionKind::Output(filename) => JValue::String(filename.to_string()),
             OptionKind::PathAsIs(value) => value.to_json(),
             OptionKind::Proxy(value) => JValue::String(value.to_string()),
+            OptionKind::Repeat(value) => value.to_json(),
             OptionKind::Resolve(value) => JValue::String(value.to_string()),
             OptionKind::Retry(value) => value.to_json(),
             OptionKind::RetryInterval(value) => value.to_json(),
             OptionKind::Skip(value) => value.to_json(),
             OptionKind::UnixSocket(value) => JValue::String(value.to_string()),
+            OptionKind::User(value) => JValue::String(value.to_string()),
             OptionKind::Variable(value) => {
                 JValue::String(format!("{}={}", value.name, value.value))
             }
             OptionKind::Verbose(value) => value.to_json(),
             OptionKind::VeryVerbose(value) => value.to_json(),
         };
-        attributes.push((name, value));
 
+        // If the value contains the unit such as `{ "value": 10, "unit": "second" }`
+        // The JSON for this option should still have one level
+        // for example: { "name": "delay", "value": 10, "unit", "second" }
+        let attributes = if let JValue::Object(mut attributes) = value {
+            attributes.push((
+                "name".to_string(),
+                JValue::String(self.kind.identifier().to_string()),
+            ));
+            attributes
+        } else {
+            vec![
+                (
+                    "name".to_string(),
+                    JValue::String(self.kind.identifier().to_string()),
+                ),
+                ("value".to_string(), value),
+            ]
+        };
         JValue::Object(attributes)
     }
 }
@@ -324,35 +370,47 @@ impl ToJson for BooleanOption {
     fn to_json(&self) -> JValue {
         match self {
             BooleanOption::Literal(value) => JValue::Boolean(*value),
-            BooleanOption::Expression(expr) => expr.to_json(),
+            BooleanOption::Placeholder(placeholder) => placeholder.to_json(),
         }
     }
 }
 
-impl ToJson for NaturalOption {
+impl ToJson for CountOption {
     fn to_json(&self) -> JValue {
         match self {
-            NaturalOption::Literal(value) => JValue::Number(value.to_string()),
-            NaturalOption::Expression(expr) => expr.to_json(),
+            CountOption::Literal(value) => value.to_json(),
+            CountOption::Placeholder(placeholder) => placeholder.to_json(),
         }
     }
 }
 
-impl ToJson for RetryOption {
+impl ToJson for Count {
     fn to_json(&self) -> JValue {
         match self {
-            RetryOption::Literal(value) => value.to_json(),
-            RetryOption::Expression(expr) => expr.to_json(),
+            Count::Finite(n) => JValue::Number(n.to_string()),
+            Count::Infinite => JValue::Number("-1".to_string()),
         }
     }
 }
 
-impl ToJson for Retry {
+impl ToJson for DurationOption {
     fn to_json(&self) -> JValue {
         match self {
-            Retry::None => JValue::Number("0".to_string()),
-            Retry::Finite(value) => JValue::Number(value.to_string()),
-            Retry::Infinite => JValue::Number("-1".to_string()),
+            DurationOption::Literal(value) => value.to_json(),
+            DurationOption::Placeholder(placeholder) => placeholder.to_json(),
+        }
+    }
+}
+
+impl ToJson for Duration {
+    fn to_json(&self) -> JValue {
+        if let Some(unit) = self.unit {
+            let mut attributes =
+                vec![("value".to_string(), JValue::Number(self.value.to_string()))];
+            attributes.push(("unit".to_string(), JValue::String(unit.to_string())));
+            JValue::Object(attributes)
+        } else {
+            JValue::Number(self.value.to_string())
         }
     }
 }
@@ -366,6 +424,9 @@ impl ToJson for Capture {
         if !self.filters.is_empty() {
             let filters = JValue::List(self.filters.iter().map(|(_, f)| f.to_json()).collect());
             attributes.push(("filters".to_string(), filters));
+        }
+        if self.redact {
+            attributes.push(("redact".to_string(), JValue::Boolean(true)));
         }
         JValue::Object(attributes)
     }
@@ -392,62 +453,35 @@ impl ToJson for Query {
 
 fn query_value_attributes(query_value: &QueryValue) -> Vec<(String, JValue)> {
     let mut attributes = vec![];
+    let att_type = JValue::String(query_value.identifier().to_string());
+    attributes.push(("type".to_string(), att_type));
+
     match query_value {
-        QueryValue::Status => {
-            attributes.push(("type".to_string(), JValue::String("status".to_string())));
-        }
-        QueryValue::Url => {
-            attributes.push(("type".to_string(), JValue::String("url".to_string())));
-        }
-        QueryValue::Body => {
-            attributes.push(("type".to_string(), JValue::String("body".to_string())));
-        }
         QueryValue::Jsonpath { expr, .. } => {
-            attributes.push(("type".to_string(), JValue::String("jsonpath".to_string())));
             attributes.push(("expr".to_string(), JValue::String(expr.to_string())));
         }
         QueryValue::Header { name, .. } => {
-            attributes.push(("type".to_string(), JValue::String("header".to_string())));
             attributes.push(("name".to_string(), JValue::String(name.to_string())));
         }
         QueryValue::Cookie { expr, .. } => {
-            attributes.push(("type".to_string(), JValue::String("cookie".to_string())));
             attributes.push(("expr".to_string(), JValue::String(expr.to_string())));
         }
         QueryValue::Xpath { expr, .. } => {
-            attributes.push(("type".to_string(), JValue::String("xpath".to_string())));
             attributes.push(("expr".to_string(), JValue::String(expr.to_string())));
         }
         QueryValue::Regex { value, .. } => {
-            attributes.push(("type".to_string(), JValue::String("regex".to_string())));
             attributes.push(("expr".to_string(), value.to_json()));
         }
         QueryValue::Variable { name, .. } => {
-            attributes.push(("type".to_string(), JValue::String("variable".to_string())));
             attributes.push(("name".to_string(), JValue::String(name.to_string())));
-        }
-        QueryValue::Duration => {
-            attributes.push(("type".to_string(), JValue::String("duration".to_string())));
-        }
-        QueryValue::Bytes => {
-            attributes.push(("type".to_string(), JValue::String("bytes".to_string())));
-        }
-        QueryValue::Sha256 => {
-            attributes.push(("type".to_string(), JValue::String("sha256".to_string())));
-        }
-        QueryValue::Md5 => {
-            attributes.push(("type".to_string(), JValue::String("md5".to_string())));
         }
         QueryValue::Certificate {
             attribute_name: field,
             ..
         } => {
-            attributes.push((
-                "type".to_string(),
-                JValue::String("certificate".to_string()),
-            ));
             attributes.push(("expr".to_string(), field.to_json()));
         }
+        _ => {}
     };
     attributes
 }
@@ -473,14 +507,7 @@ impl ToJson for Regex {
 
 impl ToJson for CertificateAttributeName {
     fn to_json(&self) -> JValue {
-        let value = match self {
-            CertificateAttributeName::Subject => "Subject",
-            CertificateAttributeName::Issuer => "Issuer",
-            CertificateAttributeName::StartDate => "Start-Date",
-            CertificateAttributeName::ExpireDate => "Expire-Date",
-            CertificateAttributeName::SerialNumber => "Serial-Number",
-        };
-        JValue::String(value.to_string())
+        JValue::String(self.identifier().to_string())
     }
 }
 
@@ -488,92 +515,59 @@ impl ToJson for Predicate {
     fn to_json(&self) -> JValue {
         let mut attributes = vec![];
         if self.not {
-            attributes.push(("not".to_string(), JValue::Boolean(true)))
+            attributes.push(("not".to_string(), JValue::Boolean(true)));
         }
-        match self.predicate_func.value.clone() {
-            PredicateFuncValue::Equal { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("equal".to_string())));
-                add_predicate_value(&mut attributes, value);
-            }
+        let identifier = self.predicate_func.value.identifier();
+        attributes.push(("type".to_string(), JValue::String(identifier.to_string())));
+
+        match &self.predicate_func.value {
+            PredicateFuncValue::Equal { value, .. } => add_predicate_value(&mut attributes, value),
             PredicateFuncValue::NotEqual { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("not-equal".to_string())));
                 add_predicate_value(&mut attributes, value);
             }
             PredicateFuncValue::GreaterThan { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("greater".to_string())));
                 add_predicate_value(&mut attributes, value);
             }
             PredicateFuncValue::GreaterThanOrEqual { value, .. } => {
-                attributes.push((
-                    "type".to_string(),
-                    JValue::String("greater-or-equal".to_string()),
-                ));
                 add_predicate_value(&mut attributes, value);
             }
             PredicateFuncValue::LessThan { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("less".to_string())));
                 add_predicate_value(&mut attributes, value);
             }
             PredicateFuncValue::LessThanOrEqual { value, .. } => {
-                attributes.push((
-                    "type".to_string(),
-                    JValue::String("less-or-equal".to_string()),
-                ));
                 add_predicate_value(&mut attributes, value);
             }
             PredicateFuncValue::StartWith { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("start-with".to_string())));
                 add_predicate_value(&mut attributes, value);
             }
             PredicateFuncValue::EndWith { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("end-with".to_string())));
                 add_predicate_value(&mut attributes, value);
             }
             PredicateFuncValue::Contain { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("contain".to_string())));
                 add_predicate_value(&mut attributes, value);
             }
             PredicateFuncValue::Include { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("include".to_string())));
                 add_predicate_value(&mut attributes, value);
             }
             PredicateFuncValue::Match { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("match".to_string())));
                 add_predicate_value(&mut attributes, value);
             }
-            PredicateFuncValue::IsInteger => {
-                attributes.push(("type".to_string(), JValue::String("isInteger".to_string())));
-            }
-            PredicateFuncValue::IsFloat => {
-                attributes.push(("type".to_string(), JValue::String("isFloat".to_string())));
-            }
-            PredicateFuncValue::IsBoolean => {
-                attributes.push(("type".to_string(), JValue::String("isBoolean".to_string())));
-            }
-            PredicateFuncValue::IsString => {
-                attributes.push(("type".to_string(), JValue::String("isString".to_string())));
-            }
-            PredicateFuncValue::IsCollection => {
-                attributes.push((
-                    "type".to_string(),
-                    JValue::String("isCollection".to_string()),
-                ));
-            }
-            PredicateFuncValue::IsDate => {
-                attributes.push(("type".to_string(), JValue::String("isDate".to_string())));
-            }
-            PredicateFuncValue::Exist => {
-                attributes.push(("type".to_string(), JValue::String("exist".to_string())));
-            }
-            PredicateFuncValue::IsEmpty => {
-                attributes.push(("type".to_string(), JValue::String("isEmpty".to_string())));
-            }
+            PredicateFuncValue::IsInteger
+            | PredicateFuncValue::IsFloat
+            | PredicateFuncValue::IsBoolean
+            | PredicateFuncValue::IsString
+            | PredicateFuncValue::IsCollection
+            | PredicateFuncValue::IsDate
+            | PredicateFuncValue::IsIsoDate
+            | PredicateFuncValue::Exist
+            | PredicateFuncValue::IsEmpty
+            | PredicateFuncValue::IsNumber => {}
         }
         JValue::Object(attributes)
     }
 }
 
-fn add_predicate_value(attributes: &mut Vec<(String, JValue)>, predicate_value: PredicateValue) {
+fn add_predicate_value(attributes: &mut Vec<(String, JValue)>, predicate_value: &PredicateValue) {
     let (value, encoding) = json_predicate_value(predicate_value);
     attributes.push(("value".to_string(), value));
     if let Some(encoding) = encoding {
@@ -581,23 +575,23 @@ fn add_predicate_value(attributes: &mut Vec<(String, JValue)>, predicate_value: 
     }
 }
 
-fn json_predicate_value(predicate_value: PredicateValue) -> (JValue, Option<String>) {
+fn json_predicate_value(predicate_value: &PredicateValue) -> (JValue, Option<String>) {
     match predicate_value {
         PredicateValue::String(value) => (JValue::String(value.to_string()), None),
         PredicateValue::MultilineString(value) => (JValue::String(value.value().to_string()), None),
-        PredicateValue::Bool(value) => (JValue::Boolean(value), None),
+        PredicateValue::Bool(value) => (JValue::Boolean(*value), None),
         PredicateValue::Null => (JValue::Null, None),
         PredicateValue::Number(value) => (JValue::Number(value.to_string()), None),
         PredicateValue::File(value) => (value.to_json(), None),
         PredicateValue::Hex(value) => {
-            let base64_string = general_purpose::STANDARD.encode(value.value);
+            let base64_string = general_purpose::STANDARD.encode(value.value.clone());
             (JValue::String(base64_string), Some("base64".to_string()))
         }
         PredicateValue::Base64(value) => {
-            let base64_string = general_purpose::STANDARD.encode(value.value);
+            let base64_string = general_purpose::STANDARD.encode(value.value.clone());
             (JValue::String(base64_string), Some("base64".to_string()))
         }
-        PredicateValue::Expression(value) => (JValue::String(value.to_string()), None),
+        PredicateValue::Placeholder(value) => (JValue::String(value.to_string()), None),
         PredicateValue::Regex(value) => {
             (JValue::String(value.to_string()), Some("regex".to_string()))
         }
@@ -620,7 +614,7 @@ impl ToJson for JsonValue {
                     .map(|elem| (elem.name.to_string(), elem.value.to_json()))
                     .collect(),
             ),
-            JsonValue::Expression(exp) => JValue::String(format!("{{{{{exp}}}}}")),
+            JsonValue::Placeholder(exp) => JValue::String(format!("{{{{{exp}}}}}")),
         }
     }
 }
@@ -640,49 +634,24 @@ impl ToJson for Filter {
 impl ToJson for FilterValue {
     fn to_json(&self) -> JValue {
         let mut attributes = vec![];
+        let att_name = "type".to_string();
+        let att_value = JValue::String(self.identifier().to_string());
+        attributes.push((att_name, att_value));
+
         match self {
-            FilterValue::Count => {
-                attributes.push(("type".to_string(), JValue::String("count".to_string())));
-            }
-            FilterValue::DaysAfterNow => {
-                attributes.push((
-                    "type".to_string(),
-                    JValue::String("daysAfterNow".to_string()),
-                ));
-            }
-            FilterValue::DaysBeforeNow => {
-                attributes.push((
-                    "type".to_string(),
-                    JValue::String("daysBeforeNow".to_string()),
-                ));
-            }
             FilterValue::Decode { encoding, .. } => {
-                attributes.push(("type".to_string(), JValue::String("decode".to_string())));
                 attributes.push(("encoding".to_string(), JValue::String(encoding.to_string())));
             }
             FilterValue::Format { fmt, .. } => {
-                attributes.push(("type".to_string(), JValue::String("format".to_string())));
                 attributes.push(("fmt".to_string(), JValue::String(fmt.to_string())));
             }
             FilterValue::JsonPath { expr, .. } => {
-                attributes.push(("type".to_string(), JValue::String("jsonpath".to_string())));
                 attributes.push(("expr".to_string(), JValue::String(expr.to_string())));
             }
             FilterValue::Nth { n, .. } => {
-                attributes.push(("type".to_string(), JValue::String("nth".to_string())));
                 attributes.push(("n".to_string(), JValue::Number(n.to_string())));
             }
-            FilterValue::HtmlEscape => {
-                attributes.push(("type".to_string(), JValue::String("htmlEscape".to_string())));
-            }
-            FilterValue::HtmlUnescape => {
-                attributes.push((
-                    "type".to_string(),
-                    JValue::String("htmlUnescape".to_string()),
-                ));
-            }
             FilterValue::Regex { value, .. } => {
-                attributes.push(("type".to_string(), JValue::String("regex".to_string())));
                 attributes.push(("expr".to_string(), value.to_json()));
             }
             FilterValue::Replace {
@@ -690,47 +659,56 @@ impl ToJson for FilterValue {
                 new_value,
                 ..
             } => {
-                attributes.push(("type".to_string(), JValue::String("replace".to_string())));
                 attributes.push(("old_value".to_string(), old_value.to_json()));
                 attributes.push((
                     "new_value".to_string(),
                     JValue::String(new_value.to_string()),
                 ));
             }
-            FilterValue::UrlEncode => {
-                attributes.push(("type".to_string(), JValue::String("urlEncode".to_string())));
-            }
-            FilterValue::UrlDecode => {
-                attributes.push(("type".to_string(), JValue::String("urlDecode".to_string())));
-            }
             FilterValue::Split { sep, .. } => {
-                attributes.push(("type".to_string(), JValue::String("split".to_string())));
                 attributes.push(("sep".to_string(), JValue::String(sep.to_string())));
             }
             FilterValue::ToDate { fmt, .. } => {
-                attributes.push(("type".to_string(), JValue::String("toDate".to_string())));
                 attributes.push(("fmt".to_string(), JValue::String(fmt.to_string())));
             }
-            FilterValue::ToInt => {
-                attributes.push(("type".to_string(), JValue::String("toInt".to_string())));
-            }
             FilterValue::XPath { expr, .. } => {
-                attributes.push(("type".to_string(), JValue::String("xpath".to_string())));
                 attributes.push(("expr".to_string(), JValue::String(expr.to_string())));
             }
+            _ => {}
         }
         JValue::Object(attributes)
     }
 }
 
-impl ToJson for Expr {
+impl ToJson for Placeholder {
     fn to_json(&self) -> JValue {
         JValue::String(format!("{{{{{}}}}}", self))
     }
 }
 
+impl ToJson for Comment {
+    fn to_json(&self) -> JValue {
+        JValue::String(self.value.to_string())
+    }
+}
+
+impl ToJson for NaturalOption {
+    fn to_json(&self) -> JValue {
+        match self {
+            NaturalOption::Literal(value) => JValue::Number(value.to_string()),
+            NaturalOption::Placeholder(placeholder) => placeholder.to_json(),
+        }
+    }
+}
 #[cfg(test)]
 pub mod tests {
+    use hurl_core::ast::{
+        LineTerminator, Method, Number, PredicateFunc, SourceInfo, Status, Template,
+        TemplateElement, Version, Whitespace, I64,
+    };
+    use hurl_core::reader::Pos;
+    use hurl_core::typing::ToSource;
+
     use super::*;
 
     fn whitespace() -> Whitespace {
@@ -760,7 +738,7 @@ pub mod tests {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "http://example.com".to_string(),
-                        encoded: "not_used".to_string(),
+                        source: "not_used".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                 },
@@ -772,7 +750,7 @@ pub mod tests {
                         delimiter: None,
                         elements: vec![TemplateElement::String {
                             value: "Foo".to_string(),
-                            encoded: "unused".to_string(),
+                            source: "unused".to_source(),
                         }],
                         source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                     },
@@ -782,7 +760,7 @@ pub mod tests {
                         delimiter: None,
                         elements: vec![TemplateElement::String {
                             value: "Bar".to_string(),
-                            encoded: "unused".to_string(),
+                            source: "unused".to_source(),
                         }],
                         source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                     },
@@ -873,7 +851,7 @@ pub mod tests {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "Content-Length".to_string(),
-                        encoded: "10".to_string(),
+                        source: "Content-Length".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                 },
@@ -889,7 +867,7 @@ pub mod tests {
                 delimiter: None,
                 elements: vec![TemplateElement::String {
                     value: "size".to_string(),
-                    encoded: "unused".to_string(),
+                    source: "unused".to_source(),
                 }],
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             },
@@ -897,6 +875,8 @@ pub mod tests {
             space2: whitespace(),
             query: header_query(),
             filters: vec![],
+            space3: whitespace(),
+            redact: false,
             line_terminator0: line_terminator(),
         }
     }
@@ -921,8 +901,10 @@ pub mod tests {
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                 value: PredicateFuncValue::Equal {
                     space0: whitespace(),
-                    value: PredicateValue::Number(Number::Integer(value)),
-                    operator: false,
+                    value: PredicateValue::Number(Number::Integer(I64::new(
+                        value,
+                        value.to_string().to_source(),
+                    ))),
                 },
             },
         }
@@ -967,7 +949,7 @@ pub mod tests {
         assert_eq!(
             equal_int_predicate(10).to_json(),
             JValue::Object(vec![
-                ("type".to_string(), JValue::String("equal".to_string())),
+                ("type".to_string(), JValue::String("==".to_string())),
                 ("value".to_string(), JValue::Number("10".to_string()))
             ]),
         );
@@ -991,7 +973,7 @@ pub mod tests {
                 (
                     "predicate".to_string(),
                     JValue::Object(vec![
-                        ("type".to_string(), JValue::String("equal".to_string())),
+                        ("type".to_string(), JValue::String("==".to_string())),
                         ("value".to_string(), JValue::Number("10".to_string()))
                     ])
                 )

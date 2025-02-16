@@ -9,8 +9,8 @@ $lib_dir="$vcpkg_dir\installed\x64-windows\bin"
 git -C $vcpkg_dir pull
 
 # install libxml and libcurl[openssl]
-vcpkg install --recurse --x-use-aria2 curl[core,non-http,schannel,ssl,sspi,http2]:x64-windows  || true
-vcpkg install --recurse --x-use-aria2 libxml2[core,iconv]:x64-windows || true
+vcpkg install --recurse curl[core,non-http,schannel,ssl,sspi,http2]:x64-windows
+vcpkg install --recurse libxml2[core,iconv]:x64-windows
 vcpkg update
 if ($LASTEXITCODE) { Throw }
 vcpkg upgrade --no-dry-run
@@ -21,8 +21,8 @@ Set-ItemProperty -Path HKCU:\Environment -Name VCPKGRS_DYNAMIC -Value "1"
 $env:VCPKGRS_DYNAMIC = [System.Environment]::GetEnvironmentVariable("VCPKGRS_DYNAMIC","User")
 if ($LASTEXITCODE) { Throw }
 
-# update pip
-python -m pip install --upgrade pip --quiet
+# install python 3.11
+choco install --confirm python311
 if ($LASTEXITCODE) { Throw }
 
 # install proxy
@@ -47,3 +47,7 @@ sc queryex squidsrv | tee -Append -filepath integration\build\proxy.log
 echo "==== Squid process status"
 Get-Process | Where {$_.Name -eq "Squid"} | tee -Append -filepath integration\build\proxy.log
 
+# install jq
+echo "==== install jq"
+choco install --confirm jq
+if ($LASTEXITCODE) { Throw }

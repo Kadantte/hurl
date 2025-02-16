@@ -1,19 +1,223 @@
-[4.3.0 (TO BE RELEASED)](https://github.com/Orange-OpenSource/hurl/blob/master/CHANGELOG.md#4.3.0)
+[6.1.0 (TBD)](https://github.com/Orange-OpenSource/hurl/blob/master/CHANGELOG.md#6.1.0)
 ========================================================================================================================
 
 Thanks to
-[@jaminalder](https://github.com/jaminalder)
+[@ashishajr](https://github.com/ashishajr),
+[@kidbrax](https://github.com/kidbrax),
+[@theoforger](https://github.com/theoforger),
+[@docwhat](https://github.com/docwhat),
+[@glb-cblin](https://github.com/glb-cblin),
+[@Enoz](https://github.com/Enoz),
+[@ikorason](https://github.com/ikorason),
+[@uday-rana](https://github.com/uday-rana),
+[@lu-zero](https://github.com/lu-zero),
+[@nghiab1906724](https://github.com/nghiab1906724),
+
+Breaking Changes:
+
+* Remove deprecated predicates (notEquals, greaterThan etc...) in favor of operators [#3532](https://github.com/Orange-OpenSource/hurl/issues/3532)
+* Remove deprecated keyword HTTP/* for HTTP [#3697](https://github.com/Orange-OpenSource/hurl/issues/3697)
+
 
 Enhancements:
 
-* Display source request when there are asserts/runtime errors [#2351](https://github.com/Orange-OpenSource/hurl/issues/2351)
-* Using explicit stdout output [#2312](https://github.com/Orange-OpenSource/hurl/issues/2312)
-* Add --netrc, --netrc-file and --netrc-optional options [#2094](https://github.com/Orange-OpenSource/hurl/issues/2094)
+* Add version query and integration tests [#1706](https://github.com/Orange-OpenSource/hurl/issues/1706)
+* Deprecate includes in favor of contains predicate [#1896](https://github.com/Orange-OpenSource/hurl/issues/1896)
+* Add curl -H/--header option to globally add headers to all requests [#1905](https://github.com/Orange-OpenSource/hurl/issues/1905) [#2144](https://github.com/Orange-OpenSource/hurl/issues/2144)
+* Add base64 decode filter [#2145](https://github.com/Orange-OpenSource/hurl/issues/2145)
+* Add base64 encode filter [#2145](https://github.com/Orange-OpenSource/hurl/issues/2145)
+* Redacts secrets from JUnit reports [#2947](https://github.com/Orange-OpenSource/hurl/issues/2947) [#2972](https://github.com/Orange-OpenSource/hurl/issues/2972)
+* Redacts secrets from JSON report [#2947](https://github.com/Orange-OpenSource/hurl/issues/2947) [#2972](https://github.com/Orange-OpenSource/hurl/issues/2972)
+* Redact secret in HTML report [#2947](https://github.com/Orange-OpenSource/hurl/issues/2947) [#2972](https://github.com/Orange-OpenSource/hurl/issues/2972)
+* Redact secrets from curl export [#2947](https://github.com/Orange-OpenSource/hurl/issues/2947) [#2972](https://github.com/Orange-OpenSource/hurl/issues/2972)
+* Redact secrets from cookies export [#2947](https://github.com/Orange-OpenSource/hurl/issues/2947) [#2972](https://github.com/Orange-OpenSource/hurl/issues/2972)
+* Allow sending empty HTTP header [#3536](https://github.com/Orange-OpenSource/hurl/issues/3536)
+* Redact dynamic values from logs [#3543](https://github.com/Orange-OpenSource/hurl/issues/3543)
+* Add header option per request [#3575](https://github.com/Orange-OpenSource/hurl/issues/3575)
+* Fix invalid escape in hurlfmt parse func [#3615](https://github.com/Orange-OpenSource/hurl/issues/3615)
+* hurlfmt: Use Hurl predicates identifiers for Hurl to JSON file export [#3662](https://github.com/Orange-OpenSource/hurl/issues/3662)
 
 
 Bugs Fixed:
 
+* Fix missing request line errors in HTML report [#3534](https://github.com/Orange-OpenSource/hurl/issues/3534)
+* Eval template in JSON object key [#3593](https://github.com/Orange-OpenSource/hurl/issues/3593)
+* Show error message if format is invalid in `format` filter [#3613](https://github.com/Orange-OpenSource/hurl/issues/3613)
+* Create parent folders if missing when using --cookie-jar FILE [#3637](https://github.com/Orange-OpenSource/hurl/issues/3637)
+* Remove lint errors [#3648](https://github.com/Orange-OpenSource/hurl/issues/3648)
+* Support BigInteger in variable [#3656](https://github.com/Orange-OpenSource/hurl/issues/3656)
+* Fix changing HTTP version per request sometimes not effective [#3719](https://github.com/Orange-OpenSource/hurl/issues/3719)
+
+
+[6.0.0 (2024-12-03)](https://github.com/Orange-OpenSource/hurl/blob/master/CHANGELOG.md#6.0.0)
+========================================================================================================================
+
+Thanks to
+[@cemoktra](https://github.com/cemoktra),
+[@zikani03](https://github.com/zikani03),
+[@lambrospetrou](https://github.com/lambrospetrou),
+[@jmvargas](https://github.com/jmvargas),
+[@quantonganh](https://github.com/quantonganh),
+[@sandeshbhusal](https://github.com/sandeshbhusal),
+[@thePanz](https://github.com/thePanz),
+[@niklasweimann](https://github.com/niklasweimann),
+[@infogulch](https://github.com/infogulch),
+[@orlandow](https://github.com/orlandow),
+[@bp7968h](https://github.com/bp7968h),
+
+Breaking Changes:
+
+* Check that variables do not conflict with existing functions [#3229](https://github.com/Orange-OpenSource/hurl/issues/3229)
+* Remove deprecated --fail-at-end option [#3430](https://github.com/Orange-OpenSource/hurl/issues/3430)
+* Change API for setting variable in hurl::runner::run [#3440](https://github.com/Orange-OpenSource/hurl/issues/3440)
+* Remove hurlfmt deprecated --format option [#3445](https://github.com/Orange-OpenSource/hurl/issues/3445)
+* Rename feature flag from vendored-openssl to static-openssl [#3460](https://github.com/Orange-OpenSource/hurl/issues/3460)
+
+
+Enhancements:
+
+* Implement function newUuid [#973](https://github.com/Orange-OpenSource/hurl/issues/973)
+* Implement --limit-rate from curl [#1222](https://github.com/Orange-OpenSource/hurl/issues/1222)
+* Add --curl option to export executed requests to curl commands [#2679](https://github.com/Orange-OpenSource/hurl/issues/2679)
+* Configure --connect-timeout per request [#3163](https://github.com/Orange-OpenSource/hurl/issues/3163)
+* Support short name for sections [QueryStringParams] => [Query], [FormParams] => [Form], [MultipartFormData] => [Multipart] [#3238](https://github.com/Orange-OpenSource/hurl/issues/3238)
+* Remove url-specific parser (align with grammar) [#3244](https://github.com/Orange-OpenSource/hurl/issues/3244)
+* Remove the crate float-cmp [#3247](https://github.com/Orange-OpenSource/hurl/issues/3247)
+* Jsonpath / Add filter on boolean value  [#3252](https://github.com/Orange-OpenSource/hurl/issues/3252)
+* Jsonpath / Add non-equal filter on string and number value [#3261](https://github.com/Orange-OpenSource/hurl/issues/3261)
+* Add support for backtick strings in predicates values [#3317](https://github.com/Orange-OpenSource/hurl/issues/3317)
+* Categorise options in --help [#3339](https://github.com/Orange-OpenSource/hurl/issues/3339)
+* Support more JSON / XML "like" mimetypes with debug output [#3343](https://github.com/Orange-OpenSource/hurl/issues/3343)
+* Add curl debug command to --json and JSON report [#3374](https://github.com/Orange-OpenSource/hurl/issues/3374)
+* Add curl debug command to HTML report [#3386](https://github.com/Orange-OpenSource/hurl/issues/3386)
+* Render Date value [#3431](https://github.com/Orange-OpenSource/hurl/issues/3431)
+* Add newDate generator [#3443](https://github.com/Orange-OpenSource/hurl/issues/3443)
+
+
+Bugs Fixed:
+
+* Fix reading standard input multiple times [#3216](https://github.com/Orange-OpenSource/hurl/issues/3216)
+* Fix filename parsing (used by cert option) [#3242](https://github.com/Orange-OpenSource/hurl/issues/3242)
+* Add additional check for --max-filesize option [#3245](https://github.com/Orange-OpenSource/hurl/issues/3245)
+* Support case-insensitive Cookie Attributes [#3265](https://github.com/Orange-OpenSource/hurl/issues/3265)
+* Allow any string in Location Header when not following redirection [#3293](https://github.com/Orange-OpenSource/hurl/issues/3293)
+* Fix graceful shutdown of workers threads in --test [#3297](https://github.com/Orange-OpenSource/hurl/issues/3297)
+* Fix missing space in variable option HTML export [#3412](https://github.com/Orange-OpenSource/hurl/issues/3412)
+
+
+[5.0.1 (2024-08-30)](https://github.com/Orange-OpenSource/hurl/blob/master/CHANGELOG.md#5.0.1)
+========================================================================================================================
+
+Bugs Fixed:
+
+* Fix regression in --output when output file doesn't exist [#3195](https://github.com/Orange-OpenSource/hurl/issues/3195)
+
+[5.0.0 (2024-08-29)](https://github.com/Orange-OpenSource/hurl/blob/master/CHANGELOG.md#5.0.0)
+========================================================================================================================
+
+Thanks to
+[@lambrospetrou](https://github.com/lambrospetrou),
+[@OverkillGuy](https://github.com/OverkillGuy),
+[@badboy](https://github.com/badboy),
+[@DenuxPlays](https://github.com/DenuxPlays),
+[@linkdd](https://github.com/linkdd),
+[@nkback](https://github.com/nkback),
+[@claytonneal](https://github.com/claytonneal),
+
+
+Breaking Changes:
+
+* Encode oneline string only with one backtick [#3113](https://github.com/Orange-OpenSource/hurl/issues/3113)
+
+
+Enhancements:
+
+* Create intermediary directories if necessary when producing TAP report [#2860](https://github.com/Orange-OpenSource/hurl/issues/2860)
+* Expose request comments in --out json (hurlfmt) [#2850](https://github.com/Orange-OpenSource/hurl/issues/2850)
+* Create intermediary directories if necessary when producing JUnit report [#2842](https://github.com/Orange-OpenSource/hurl/issues/2842)
+* Add global requests count in test summary [#2832](https://github.com/Orange-OpenSource/hurl/issues/2832)
+* Replace output warnings by errors [#2815](https://github.com/Orange-OpenSource/hurl/issues/2815)
+* Fix inconsistent case for fields queryString and httpVersion in --json [#2804](https://github.com/Orange-OpenSource/hurl/issues/2804)
+* Run tests in parallel [#2753](https://github.com/Orange-OpenSource/hurl/issues/2753)
+* Add support for importing curl url option in hurlfmt [#2750](https://github.com/Orange-OpenSource/hurl/issues/2750)
+* Add JSON report [#2738](https://github.com/Orange-OpenSource/hurl/issues/2738)
+* Add repeat option to repeat a sequence of Hurl file [#2680](https://github.com/Orange-OpenSource/hurl/issues/2680)
+* Add repeat option per request [#2680](https://github.com/Orange-OpenSource/hurl/issues/2680)
+* Add optional duration unit [#2653](https://github.com/Orange-OpenSource/hurl/issues/2653)
+* Apply delay only once per entry, no matter how many retry [#1973](https://github.com/Orange-OpenSource/hurl/issues/1973)
+* Add toFloat filter [#1732](https://github.com/Orange-OpenSource/hurl/issues/1732)
+* Accept directory as Hurl arguments for processing file [#1446](https://github.com/Orange-OpenSource/hurl/issues/1446)
+
+
+Bugs Fixed:
+
+* Get SSL certificates info on reused connections, from a cache [#3031](https://github.com/Orange-OpenSource/hurl/issues/3031)
+* Fix max-redirs: -1 in [Options] section [#3023](https://github.com/Orange-OpenSource/hurl/issues/3023)
+* Fix error displayed in double with bad option [#2920](https://github.com/Orange-OpenSource/hurl/issues/2920)
+* Fix hurlfmt exit code with lint error [#2919](https://github.com/Orange-OpenSource/hurl/issues/2919)
+* Truncate file then append it when dumping response with --output. [#2886](https://github.com/Orange-OpenSource/hurl/issues/2886)
+* Fix crash with --json option when capturing 'HttpOnly' and 'Secure' cookie attribute [#2871](https://github.com/Orange-OpenSource/hurl/issues/2871)
+* Fix crash when capturing 'Expires' cookie attribute [#2870](https://github.com/Orange-OpenSource/hurl/issues/2870)
+* Fix empty JSON key parsing [#2836](https://github.com/Orange-OpenSource/hurl/issues/2836)
+* Do not filter 'Authorization' header if host doesn't change while following redirect [#2823](https://github.com/Orange-OpenSource/hurl/issues/2823)
+* Fix sending 'Authorization' header from --user when following redirect [#2812](https://github.com/Orange-OpenSource/hurl/issues/2812)
+* Fix URL when following redirect for certain 'Location' header [#2783](https://github.com/Orange-OpenSource/hurl/issues/2783)
+* Fix powershell completion file [#2729](https://github.com/Orange-OpenSource/hurl/issues/2729)
+
+
+[4.3.0 (2024-04-23)](https://github.com/Orange-OpenSource/hurl/blob/master/CHANGELOG.md#4.3.0)
+========================================================================================================================
+
+Thanks to
+[@tarampampam](https://github.com/tarampampam),
+[@CMiksche](https://github.com/CMiksche),
+[@CodeMan99](https://github.com/CodeMan99),
+[@OverkillGuy](https://github.com/OverkillGuy),
+[@hsanson](https://github.com/hsanson),
+[@jaminalder](https://github.com/jaminalder),
+[@teto](https://github.com/teto),
+[@humphd](https://github.com/humphd),
+[@mohammed90](https://github.com/mohammed90),
+
+Enhancements:
+
+* Support --user option per request [#2585](https://github.com/Orange-OpenSource/hurl/issues/2585)
+* Add isNumber predicate [#2538](https://github.com/Orange-OpenSource/hurl/issues/2538)
+* Create intermediate directory when using --report-html [#2531](https://github.com/Orange-OpenSource/hurl/issues/2531)
+* Use '-' to read Hurl file from standard input [#2523](https://github.com/Orange-OpenSource/hurl/issues/2523)
+* Add --from-entry option to execute a file from a given entry [#2500](https://github.com/Orange-OpenSource/hurl/issues/2500)
+* Add isIsoDate predicate (take a string, checks YYYY-MM-DDTHH:mm:sssZ) [#2427](https://github.com/Orange-OpenSource/hurl/issues/2427)
+* Add completion files in Linux/MacOS packages [#2401](https://github.com/Orange-OpenSource/hurl/issues/2401)
+* Fix tarball layout to Linux filesystem [#2401](https://github.com/Orange-OpenSource/hurl/issues/2401)
+* Add --max-filesize option to limit HTTP response [#2353](https://github.com/Orange-OpenSource/hurl/issues/2353)
+* Display source request when there are asserts/runtime errors [#2351](https://github.com/Orange-OpenSource/hurl/issues/2351)
+* Using explicit stdout output [#2312](https://github.com/Orange-OpenSource/hurl/issues/2312)
+* Prevent raw binary response to be displayed on standard output [#2306](https://github.com/Orange-OpenSource/hurl/issues/2306)
+* Add --netrc, --netrc-file and --netrc-optional options [#2094](https://github.com/Orange-OpenSource/hurl/issues/2094)
+* Generate bash completion for hurl/hurlfmt [#1864](https://github.com/Orange-OpenSource/hurl/issues/1864)
+* Generate powershell completion for hurl/hurlfmt [#1864](https://github.com/Orange-OpenSource/hurl/issues/1864)
+* Generate fish completion for hurl/hurlfmt [#1864](https://github.com/Orange-OpenSource/hurl/issues/1864)
+* Generate zsh completion for hurl/hurlfmt [#1864](https://github.com/Orange-OpenSource/hurl/issues/1864)
+* Add experimental --parallel / --jobs options [#88](https://github.com/Orange-OpenSource/hurl/issues/88) [#87](https://github.com/Orange-OpenSource/hurl/issues/87)
+
+
+Bugs Fixed:
+
+* Export begin_call, end_call timings fields to RFC3339 (microseconds) [#2699](https://github.com/Orange-OpenSource/hurl/issues/2699)
+* Fix standalone css for regex [#2693](https://github.com/Orange-OpenSource/hurl/issues/2693)
+* Fix charset parsing logic of Content-Type header [#2540](https://github.com/Orange-OpenSource/hurl/issues/2540)
+* Fix filename templatization bug under certain conditions [#2533](https://github.com/Orange-OpenSource/hurl/issues/2533)
+* Fix empty glob not always returning an error [#2517](https://github.com/Orange-OpenSource/hurl/issues/2517)
+* Fix hurlfmt query certificate for hurl output format [#2511](https://github.com/Orange-OpenSource/hurl/issues/2511)
+* Fix --test progress bar not displayed when verbose is used [#2506](https://github.com/Orange-OpenSource/hurl/issues/2506)
+* Per request output takes file-root into account for path resolving [#2445](https://github.com/Orange-OpenSource/hurl/issues/2445)
+* Fix silent error when verbose option use unset variable [#2444](https://github.com/Orange-OpenSource/hurl/issues/2444)
 * Fix Content-type header override when used in lowercase [#2416](https://github.com/Orange-OpenSource/hurl/issues/2416)
+
+
+Security Issues Fixed:
+
+* Prevent script injection in HTML report [#2719](https://github.com/Orange-OpenSource/hurl/issues/2719)
 
 
 [4.2.0 (2024-01-11)](https://github.com/Orange-OpenSource/hurl/blob/master/CHANGELOG.md#4.2.0)

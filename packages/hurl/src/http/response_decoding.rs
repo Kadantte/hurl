@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,11 +27,15 @@ use encoding::DecoderTrap;
 
 use crate::http::{mimetype, HttpError, Response};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ContentEncoding {
+    /// A format using the Brotli algorithm structure (defined in RFC 7932).
     Brotli,
+    /// A format using the Lempel-Ziv coding (LZ77), with a 32-bit CRC.
     Gzip,
+    /// Using the zlib structure (defined in RFC 1950) with the deflate compression algorithm.
     Deflate,
+    /// No encoding.
     Identity,
 }
 
@@ -63,19 +67,34 @@ impl ContentEncoding {
 impl Response {
     /// Returns response body as text.
     pub fn text(&self) -> Result<String, HttpError> {
-        let encoding = self.headers.character_encoding()?;
-        let body = &self.uncompress_body()?;
-        match encoding.decode(body, DecoderTrap::Strict) {
+        let content_encodings = self.headers.content_encoding()?;
+        let body = if content_encodings.is_empty() {
+            &self.body
+        } else {
+            &self.uncompress_body()?
+        };
+        let character_encoding = self.headers.character_encoding()?;
+        match character_encoding.decode(body, DecoderTrap::Strict) {
             Ok(s) => Ok(s),
             Err(_) => Err(HttpError::InvalidDecoding {
-                charset: encoding.name().to_string(),
+                charset: character_encoding.name().to_string(),
             }),
         }
     }
 
     /// Returns true if response is an HTML response.
     pub fn is_html(&self) -> bool {
-        self.headers.content_type().map_or(false, mimetype::is_html)
+        self.headers.content_type().is_some_and(mimetype::is_html)
+    }
+
+    /// Returns true if response is a JSON response.
+    pub fn is_json(&self) -> bool {
+        self.headers.content_type().is_some_and(mimetype::is_json)
+    }
+
+    /// Returns true if response is a XML response.
+    pub fn is_xml(&self) -> bool {
+        self.headers.content_type().is_some_and(mimetype::is_xml)
     }
 
     /// Decompresses HTTP body response.
@@ -83,7 +102,7 @@ impl Response {
         let encodings = self.headers.content_encoding()?;
         let mut data = self.body.clone();
         for encoding in &encodings {
-            data = encoding.decode(&data)?
+            data = encoding.decode(&data)?;
         }
         Ok(data)
     }
@@ -143,7 +162,20 @@ fn uncompress_zlib(data: &[u8]) -> Result<Vec<u8>, HttpError> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::http::{Header, HeaderVec, Response};
+    use crate::http::{Header, HeaderVec, HttpVersion, Response};
+
+    fn default_response() -> Response {
+        Response {
+            version: HttpVersion::Http10,
+            status: 200,
+            headers: HeaderVec::new(),
+            body: vec![],
+            duration: Default::default(),
+            url: "http://localhost".parse().unwrap(),
+            certificate: None,
+            ip_addr: Default::default(),
+        }
+    }
 
     #[test]
     fn test_parse_content_encoding() {
@@ -161,7 +193,7 @@ pub mod tests {
 
     #[test]
     fn test_content_encoding() {
-        let response = Response::default();
+        let response = default_response();
         assert_eq!(response.headers.content_encoding().unwrap(), vec![]);
 
         let mut headers = HeaderVec::new();
@@ -169,7 +201,7 @@ pub mod tests {
 
         let response = Response {
             headers,
-            ..Default::default()
+            ..default_response()
         };
         assert_eq!(
             response.headers.content_encoding().err().unwrap(),
@@ -183,7 +215,7 @@ pub mod tests {
 
         let response = Response {
             headers,
-            ..Default::default()
+            ..default_response()
         };
         assert_eq!(
             response.headers.content_encoding().unwrap(),
@@ -197,7 +229,7 @@ pub mod tests {
         headers.push(Header::new("Content-Encoding", "br, identity"));
         let response = Response {
             headers,
-            ..Default::default()
+            ..default_response()
         };
         assert_eq!(
             response.headers.content_encoding().unwrap(),
@@ -216,7 +248,7 @@ pub mod tests {
                 0x21, 0x2c, 0x00, 0x04, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c,
                 0x64, 0x21, 0x03,
             ],
-            ..Default::default()
+            ..default_response()
         };
         assert_eq!(response.uncompress_body().unwrap(), b"Hello World!");
 
@@ -228,13 +260,13 @@ pub mod tests {
                 0x21, 0x2c, 0x00, 0x04, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c,
                 0x64, 0x21, 0x03,
             ],
-            ..Default::default()
+            ..default_response()
         };
         assert_eq!(response.uncompress_body().unwrap(), b"Hello World!");
 
         let response = Response {
             body: b"Hello World!".to_vec(),
-            ..Default::default()
+            ..default_response()
         };
         assert_eq!(response.uncompress_body().unwrap(), b"Hello World!");
     }
@@ -287,7 +319,7 @@ pub mod tests {
     fn hello_response() -> Response {
         Response {
             body: b"Hello World!".to_vec(),
-            ..Default::default()
+            ..default_response()
         }
     }
 
@@ -298,7 +330,7 @@ pub mod tests {
         Response {
             headers,
             body: vec![0x63, 0x61, 0x66, 0xc3, 0xa9],
-            ..Default::default()
+            ..default_response()
         }
     }
 
@@ -312,7 +344,7 @@ pub mod tests {
         Response {
             headers,
             body: vec![0x63, 0x61, 0x66, 0xe9],
-            ..Default::default()
+            ..default_response()
         }
     }
 
@@ -376,7 +408,7 @@ pub mod tests {
             Response {
                 headers,
                 body: b"Hello World!".to_vec(),
-                ..Default::default()
+                ..default_response()
             }
             .headers
             .character_encoding()
@@ -393,7 +425,7 @@ pub mod tests {
         assert_eq!(
             Response {
                 body: vec![0x63, 0x61, 0x66, 0xe9],
-                ..Default::default()
+                ..default_response()
             }
             .text()
             .err()
@@ -413,7 +445,7 @@ pub mod tests {
             Response {
                 headers,
                 body: vec![0x63, 0x61, 0x66, 0xc3, 0xa9],
-                ..Default::default()
+                ..default_response()
             }
             .text()
             .unwrap(),

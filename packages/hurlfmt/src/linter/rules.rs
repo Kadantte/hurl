@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,16 @@
  * limitations under the License.
  *
  */
-use hurl_core::ast::*;
-
-use crate::linter::core::{Error, LinterError};
-
-/// Returns lint errors for the `hurl_file`.
-pub fn check_hurl_file(hurl_file: &HurlFile) -> Vec<Error> {
-    hurl_file.entries.iter().flat_map(check_entry).collect()
-}
+use hurl_core::ast::{
+    Assert, Base64, Body, Bytes, Capture, Comment, Cookie, CookieAttribute, CookieAttributeName,
+    CookiePath, DurationOption, Entry, EntryOption, File, FileParam, Filter, FilterValue, GraphQl,
+    Hex, HurlFile, KeyValue, LineTerminator, MultilineString, MultilineStringAttribute,
+    MultilineStringKind, MultipartParam, OptionKind, Predicate, PredicateFunc, PredicateFuncValue,
+    PredicateValue, Query, QueryValue, RegexValue, Request, Response, Section, SectionValue,
+    SourceInfo, Template, Text, VariableDefinition, Whitespace,
+};
+use hurl_core::reader::Pos;
+use hurl_core::typing::{Duration, DurationUnit};
 
 /// Returns a new linted instance from this `hurl_file`.
 pub fn lint_hurl_file(hurl_file: &HurlFile) -> HurlFile {
@@ -32,40 +34,10 @@ pub fn lint_hurl_file(hurl_file: &HurlFile) -> HurlFile {
     }
 }
 
-fn check_entry(entry: &Entry) -> Vec<Error> {
-    let mut errors = vec![];
-    errors.append(&mut check_request(&entry.request));
-    match &entry.response {
-        Some(r) => errors.append(&mut check_response(r)),
-        None => {}
-    };
-    errors
-}
-
 fn lint_entry(entry: &Entry) -> Entry {
     let request = lint_request(&entry.request);
     let response = entry.response.as_ref().map(lint_response);
     Entry { request, response }
-}
-
-fn check_request(request: &Request) -> Vec<Error> {
-    let mut errors = vec![];
-    if !request.space0.value.is_empty() {
-        errors.push(Error {
-            source_info: request.space0.source_info,
-            inner: LinterError::UnnecessarySpace,
-        });
-    }
-    if request.space1.value != " " {
-        errors.push(Error {
-            source_info: request.space1.source_info,
-            inner: LinterError::OneSpace,
-        });
-    }
-    for error in check_line_terminator(&request.line_terminator0) {
-        errors.push(error);
-    }
-    errors
 }
 
 fn lint_request(request: &Request) -> Request {
@@ -94,17 +66,6 @@ fn lint_request(request: &Request) -> Request {
         body,
         source_info,
     }
-}
-
-fn check_response(response: &Response) -> Vec<Error> {
-    let mut errors = vec![];
-    if !response.space0.value.is_empty() {
-        errors.push(Error {
-            source_info: response.space0.source_info,
-            inner: LinterError::UnnecessarySpace,
-        });
-    }
-    errors
 }
 
 fn lint_response(response: &Response) -> Response {
@@ -148,8 +109,8 @@ fn lint_section(section: &Section) -> Section {
 
 fn lint_section_value(section_value: &SectionValue) -> SectionValue {
     match section_value {
-        SectionValue::QueryParams(params) => {
-            SectionValue::QueryParams(params.iter().map(lint_key_value).collect())
+        SectionValue::QueryParams(params, short) => {
+            SectionValue::QueryParams(params.iter().map(lint_key_value).collect(), *short)
         }
         SectionValue::BasicAuth(param) => {
             SectionValue::BasicAuth(param.as_ref().map(lint_key_value))
@@ -160,12 +121,13 @@ fn lint_section_value(section_value: &SectionValue) -> SectionValue {
         SectionValue::Asserts(asserts) => {
             SectionValue::Asserts(asserts.iter().map(lint_assert).collect())
         }
-        SectionValue::FormParams(params) => {
-            SectionValue::FormParams(params.iter().map(lint_key_value).collect())
+        SectionValue::FormParams(params, short) => {
+            SectionValue::FormParams(params.iter().map(lint_key_value).collect(), *short)
         }
-        SectionValue::MultipartFormData(params) => {
-            SectionValue::MultipartFormData(params.iter().map(lint_multipart_param).collect())
-        }
+        SectionValue::MultipartFormData(params, short) => SectionValue::MultipartFormData(
+            params.iter().map(lint_multipart_param).collect(),
+            *short,
+        ),
         SectionValue::Cookies(cookies) => {
             SectionValue::Cookies(cookies.iter().map(lint_cookie).collect())
         }
@@ -178,12 +140,12 @@ fn lint_section_value(section_value: &SectionValue) -> SectionValue {
 fn section_value_index(section_value: SectionValue) -> u32 {
     match section_value {
         // Request sections
-        SectionValue::QueryParams(_) => 0,
-        SectionValue::BasicAuth(_) => 1,
-        SectionValue::FormParams(_) => 2,
-        SectionValue::MultipartFormData(_) => 3,
-        SectionValue::Cookies(_) => 4,
-        SectionValue::Options(_) => 5,
+        SectionValue::Options(_) => 0,
+        SectionValue::QueryParams(_, _) => 1,
+        SectionValue::BasicAuth(_) => 2,
+        SectionValue::FormParams(_, _) => 3,
+        SectionValue::MultipartFormData(_, _) => 4,
+        SectionValue::Cookies(_) => 5,
         // Response sections
         SectionValue::Captures(_) => 0,
         SectionValue::Asserts(_) => 1,
@@ -213,6 +175,11 @@ fn lint_capture(capture: &Capture) -> Capture {
         .iter()
         .map(|(_, f)| (one_whitespace(), lint_filter(f)))
         .collect();
+    let space3 = if capture.redact {
+        one_whitespace()
+    } else {
+        empty_whitespace()
+    };
     Capture {
         line_terminators: capture.line_terminators.clone(),
         space0: empty_whitespace(),
@@ -221,6 +188,8 @@ fn lint_capture(capture: &Capture) -> Capture {
         space2: one_whitespace(),
         query: lint_query(&capture.query),
         filters,
+        space3,
+        redact: capture.redact,
         line_terminator0: lint_line_terminator(&capture.line_terminator0),
     }
 }
@@ -235,6 +204,7 @@ fn lint_query(query: &Query) -> Query {
 fn lint_query_value(query_value: &QueryValue) -> QueryValue {
     match query_value {
         QueryValue::Status => QueryValue::Status,
+        QueryValue::Version => QueryValue::Version,
         QueryValue::Url => QueryValue::Url,
         QueryValue::Header { name, .. } => QueryValue::Header {
             name: name.clone(),
@@ -278,9 +248,10 @@ fn lint_query_value(query_value: &QueryValue) -> QueryValue {
             attribute_name: field,
             ..
         } => QueryValue::Certificate {
-            attribute_name: field.clone(),
+            attribute_name: *field,
             space0: one_whitespace(),
         },
+        QueryValue::Ip => QueryValue::Ip,
     }
 }
 
@@ -339,34 +310,28 @@ fn lint_predicate_func_value(predicate_func_value: &PredicateFuncValue) -> Predi
         PredicateFuncValue::Equal { value, .. } => PredicateFuncValue::Equal {
             space0: one_whitespace(),
             value: lint_predicate_value(value),
-            operator: true,
         },
         PredicateFuncValue::NotEqual { value, .. } => PredicateFuncValue::NotEqual {
             space0: one_whitespace(),
             value: lint_predicate_value(value),
-            operator: true,
         },
         PredicateFuncValue::GreaterThan { value, .. } => PredicateFuncValue::GreaterThan {
             space0: one_whitespace(),
             value: lint_predicate_value(value),
-            operator: true,
         },
         PredicateFuncValue::GreaterThanOrEqual { value, .. } => {
             PredicateFuncValue::GreaterThanOrEqual {
                 space0: one_whitespace(),
                 value: lint_predicate_value(value),
-                operator: true,
             }
         }
         PredicateFuncValue::LessThan { value, .. } => PredicateFuncValue::LessThan {
             space0: one_whitespace(),
             value: lint_predicate_value(value),
-            operator: true,
         },
         PredicateFuncValue::LessThanOrEqual { value, .. } => PredicateFuncValue::LessThanOrEqual {
             space0: one_whitespace(),
             value: lint_predicate_value(value),
-            operator: true,
         },
         PredicateFuncValue::Contain { value, .. } => PredicateFuncValue::Contain {
             space0: one_whitespace(),
@@ -396,8 +361,10 @@ fn lint_predicate_func_value(predicate_func_value: &PredicateFuncValue) -> Predi
         PredicateFuncValue::IsString => PredicateFuncValue::IsString,
         PredicateFuncValue::IsCollection => PredicateFuncValue::IsCollection,
         PredicateFuncValue::IsDate => PredicateFuncValue::IsDate,
+        PredicateFuncValue::IsIsoDate => PredicateFuncValue::IsIsoDate,
         PredicateFuncValue::Exist => PredicateFuncValue::Exist,
         PredicateFuncValue::IsEmpty => PredicateFuncValue::IsEmpty,
+        PredicateFuncValue::IsNumber => PredicateFuncValue::IsNumber,
     }
 }
 
@@ -413,19 +380,48 @@ fn lint_predicate_value(predicate_value: &PredicateValue) -> PredicateValue {
         PredicateValue::File(value) => PredicateValue::File(lint_file(value)),
         PredicateValue::Hex(value) => PredicateValue::Hex(lint_hex(value)),
         PredicateValue::Base64(value) => PredicateValue::Base64(lint_base64(value)),
-        PredicateValue::Expression(value) => PredicateValue::Expression(value.clone()),
+        PredicateValue::Placeholder(value) => PredicateValue::Placeholder(value.clone()),
         PredicateValue::Regex(value) => PredicateValue::Regex(value.clone()),
     }
 }
 
 fn lint_multiline_string(multiline_string: &MultilineString) -> MultilineString {
     match multiline_string {
-        MultilineString::OneLineText(value) => MultilineString::OneLineText(lint_template(value)),
-        MultilineString::Text(value) => MultilineString::Text(lint_text(value)),
-        MultilineString::Json(value) => MultilineString::Json(lint_text(value)),
-        MultilineString::Xml(value) => MultilineString::Xml(lint_text(value)),
-        MultilineString::GraphQl(value) => MultilineString::GraphQl(lint_graphql(value)),
+        MultilineString {
+            kind: MultilineStringKind::Text(value),
+            attributes,
+        } => MultilineString {
+            kind: MultilineStringKind::Text(lint_text(value)),
+            attributes: lint_multiline_string_attributes(attributes),
+        },
+        MultilineString {
+            kind: MultilineStringKind::Json(value),
+            attributes,
+        } => MultilineString {
+            kind: MultilineStringKind::Json(lint_text(value)),
+            attributes: lint_multiline_string_attributes(attributes),
+        },
+        MultilineString {
+            kind: MultilineStringKind::Xml(value),
+            attributes,
+        } => MultilineString {
+            kind: MultilineStringKind::Xml(lint_text(value)),
+            attributes: lint_multiline_string_attributes(attributes),
+        },
+        MultilineString {
+            kind: MultilineStringKind::GraphQl(value),
+            attributes,
+        } => MultilineString {
+            kind: MultilineStringKind::GraphQl(lint_graphql(value)),
+            attributes: lint_multiline_string_attributes(attributes),
+        },
     }
+}
+
+fn lint_multiline_string_attributes(
+    attributes: &[MultilineStringAttribute],
+) -> Vec<MultilineStringAttribute> {
+    attributes.to_vec()
 }
 
 fn lint_text(text: &Text) -> Text {
@@ -485,7 +481,7 @@ fn lint_base64(base64: &Base64) -> Base64 {
     Base64 {
         space0: empty_whitespace(),
         value: base64.value.clone(),
-        encoded: base64.encoded.clone(),
+        source: base64.source.clone(),
         space1: empty_whitespace(),
     }
 }
@@ -494,7 +490,7 @@ fn lint_hex(hex: &Hex) -> Hex {
     Hex {
         space0: empty_whitespace(),
         value: hex.value.clone(),
-        encoded: hex.encoded.clone(),
+        source: hex.source.clone(),
         space1: empty_whitespace(),
     }
 }
@@ -565,22 +561,6 @@ fn one_whitespace() -> Whitespace {
     }
 }
 
-fn check_line_terminator(line_terminator: &LineTerminator) -> Vec<Error> {
-    let mut errors = vec![];
-    match &line_terminator.comment {
-        Some(_) => {}
-        None => {
-            if !line_terminator.space0.value.is_empty() {
-                errors.push(Error {
-                    source_info: line_terminator.space0.source_info,
-                    inner: LinterError::UnnecessarySpace,
-                });
-            }
-        }
-    }
-    errors
-}
-
 fn lint_line_terminator(line_terminator: &LineTerminator) -> LineTerminator {
     let space0 = match line_terminator.comment {
         None => empty_whitespace(),
@@ -621,7 +601,45 @@ fn lint_template(template: &Template) -> Template {
 }
 
 fn lint_entry_option(entry_option: &EntryOption) -> EntryOption {
-    entry_option.clone()
+    EntryOption {
+        line_terminators: entry_option.line_terminators.clone(),
+        space0: empty_whitespace(),
+        space1: empty_whitespace(),
+        space2: one_whitespace(),
+        kind: lint_option_kind(&entry_option.kind),
+        line_terminator0: entry_option.line_terminator0.clone(),
+    }
+}
+
+fn lint_option_kind(option_kind: &OptionKind) -> OptionKind {
+    match option_kind {
+        OptionKind::Delay(duration) => {
+            OptionKind::Delay(lint_duration_option(duration, DurationUnit::MilliSecond))
+        }
+        OptionKind::RetryInterval(duration) => {
+            OptionKind::RetryInterval(lint_duration_option(duration, DurationUnit::MilliSecond))
+        }
+        OptionKind::Variable(var_def) => OptionKind::Variable(lint_variable_definition(var_def)),
+        _ => option_kind.clone(),
+    }
+}
+
+fn lint_duration_option(
+    duration_option: &DurationOption,
+    default_unit: DurationUnit,
+) -> DurationOption {
+    match duration_option {
+        DurationOption::Literal(duration) => {
+            DurationOption::Literal(lint_duration(duration, default_unit))
+        }
+        DurationOption::Placeholder(expr) => DurationOption::Placeholder(expr.clone()),
+    }
+}
+
+fn lint_duration(duration: &Duration, default_unit: DurationUnit) -> Duration {
+    let value = duration.value.clone();
+    let unit = Some(duration.unit.unwrap_or(default_unit));
+    Duration { value, unit }
 }
 
 fn lint_filter(filter: &Filter) -> Filter {
@@ -641,6 +659,14 @@ fn lint_filter_value(filter_value: &FilterValue) -> FilterValue {
     }
 }
 
+fn lint_variable_definition(var_def: &VariableDefinition) -> VariableDefinition {
+    VariableDefinition {
+        space0: empty_whitespace(),
+        space1: empty_whitespace(),
+        ..var_def.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,7 +681,6 @@ mod tests {
             entries: vec![],
             line_terminators: vec![],
         };
-        assert_eq!(check_hurl_file(&hurl_file), vec![]);
         assert_eq!(lint_hurl_file(&hurl_file), hurl_file_linted);
     }
 
@@ -669,7 +694,6 @@ mod tests {
             entries: vec![],
             line_terminators: vec![],
         };
-        assert_eq!(check_hurl_file(&entry), vec![]);
         assert_eq!(lint_hurl_file(&entry), entry_linted);
     }
 }

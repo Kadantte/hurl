@@ -31,7 +31,7 @@ code {
     color: black;
 }
 
-.number, boolean {
+.number, .boolean, .unit {
     color: blue;
 }
 
@@ -48,7 +48,7 @@ code {
 }
 
 
-.string, .multiline, .name, .json, .xml, .base64, .hex, .filename, .cookie-value {
+.string, .multiline, .name, .json, .xml, .base64, .hex, .filename, .cookie-value, .regex {
     color: darkgreen;
 }
 
@@ -70,7 +70,7 @@ code {
         color: white;
     }
 
-    .number, .boolean {
+    .number, .boolean, .unit {
         color: dodgerblue;
     }
 

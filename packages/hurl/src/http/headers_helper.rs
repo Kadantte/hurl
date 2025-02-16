@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,11 @@
  *
  */
 
+use encoding::EncodingRef;
+
 use crate::http::header::CONTENT_ENCODING;
 use crate::http::response_decoding::ContentEncoding;
-use crate::http::{mimetype, HeaderVec, HttpError, CONTENT_TYPE};
-use encoding::EncodingRef;
+use crate::http::{mimetype, Header, HeaderVec, HttpError, CONTENT_TYPE};
 
 impl HeaderVec {
     /// Returns optional Content-type header value.
@@ -45,7 +46,7 @@ impl HeaderVec {
 
     /// Returns list of content encoding from HTTP response headers.
     ///
-    /// See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding
+    /// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding>
     pub fn content_encoding(&self) -> Result<Vec<ContentEncoding>, HttpError> {
         for header in self {
             if header.name_eq(CONTENT_ENCODING) {
@@ -58,6 +59,20 @@ impl HeaderVec {
             }
         }
         Ok(vec![])
+    }
+
+    /// Aggregates the headers from `self` and `raw_headers`
+    ///
+    /// Returns the aggregated `HeaderVec`
+    pub fn aggregate_raw_headers(&self, raw_headers: &[&str]) -> HeaderVec {
+        let mut headers = self.clone();
+        // TODO: use another function that [`Header::parse`] because [`Header::parse`] is for
+        // parsing headers line coming from a server (and not from options header)
+        let to_aggregate = raw_headers.iter().filter_map(|h| Header::parse(h));
+        for header in to_aggregate {
+            headers.push(header);
+        }
+        headers
     }
 }
 
@@ -103,5 +118,38 @@ mod tests {
         let mut headers = HeaderVec::new();
         headers.push(Header::new("content-type", "text/plain"));
         assert_eq!(headers.character_encoding().unwrap().name(), "utf-8");
+    }
+
+    #[test]
+    fn aggregate_raw_headers() {
+        let mut headers = HeaderVec::new();
+        headers.push(Header::new("Host", "localhost:8000"));
+        headers.push(Header::new("Repeated-Header", "original"));
+
+        let raw_headers = &[
+            "User-Agent: hurl/6.1.0",
+            "Invalid-Header",
+            "Repeated-Header: aggregated-1",
+            "Repeated-Header: aggregated-2",
+        ];
+        let aggregated = headers.aggregate_raw_headers(raw_headers);
+
+        assert_eq!(
+            aggregated.get("Host"),
+            Some(&Header::new("Host", "localhost:8000"))
+        );
+        assert_eq!(
+            aggregated.get("User-Agent"),
+            Some(&Header::new("User-Agent", "hurl/6.1.0"))
+        );
+        assert_eq!(aggregated.get("Invalid-Header"), None);
+        assert_eq!(
+            aggregated.get_all("Repeated-Header"),
+            vec![
+                &Header::new("Repeated-Header", "original"),
+                &Header::new("Repeated-Header", "aggregated-1"),
+                &Header::new("Repeated-Header", "aggregated-2")
+            ]
+        );
     }
 }

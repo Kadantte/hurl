@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,24 +15,23 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::Path;
 
-use hurl_core::ast::*;
+use hurl_core::ast::{FileParam, FileValue, KeyValue, MultipartParam};
 
 use crate::http;
 use crate::runner::body::eval_file;
-use crate::runner::error::Error;
+use crate::runner::error::RunnerError;
 use crate::runner::template::eval_template;
-use crate::runner::value::Value;
+use crate::runner::VariableSet;
 use crate::util::path::ContextDir;
 
 pub fn eval_multipart_param(
     multipart_param: &MultipartParam,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     context_dir: &ContextDir,
-) -> Result<http::MultipartParam, Error> {
+) -> Result<http::MultipartParam, RunnerError> {
     match multipart_param {
         MultipartParam::Param(KeyValue { key, value, .. }) => {
             let name = eval_template(key, variables)?;
@@ -49,8 +48,8 @@ pub fn eval_multipart_param(
 pub fn eval_file_param(
     file_param: &FileParam,
     context_dir: &ContextDir,
-    variables: &HashMap<String, Value>,
-) -> Result<http::FileParam, Error> {
+    variables: &VariableSet,
+) -> Result<http::FileParam, RunnerError> {
     let name = eval_template(&file_param.key, variables)?;
     let filename = eval_template(&file_param.value.filename, variables)?;
     let data = eval_file(&file_param.value.filename, variables, context_dir)?;
@@ -65,8 +64,8 @@ pub fn eval_file_param(
 
 pub fn file_value_content_type(
     file_value: &FileValue,
-    variables: &HashMap<String, Value>,
-) -> Result<String, Error> {
+    variables: &VariableSet,
+) -> Result<String, RunnerError> {
     let value = match file_value.content_type.clone() {
         None => {
             let value = eval_template(&file_value.filename, variables)?;
@@ -94,7 +93,9 @@ pub fn file_value_content_type(
 
 #[cfg(test)]
 mod tests {
-    use hurl_core::ast::SourceInfo;
+    use hurl_core::ast::{LineTerminator, SourceInfo, Template, TemplateElement, Whitespace};
+    use hurl_core::reader::Pos;
+    use hurl_core::typing::ToSource;
 
     use super::*;
 
@@ -115,7 +116,7 @@ mod tests {
         let current_dir = std::env::current_dir().unwrap();
         let file_root = Path::new("tests");
         let context_dir = ContextDir::new(current_dir.as_path(), file_root);
-        let variables = HashMap::default();
+        let variables = VariableSet::default();
         let param = eval_file_param(
             &FileParam {
                 line_terminators: vec![],
@@ -124,7 +125,7 @@ mod tests {
                     delimiter: None,
                     elements: vec![TemplateElement::String {
                         value: "upload1".to_string(),
-                        encoded: "upload1".to_string(),
+                        source: "upload1".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                 },
@@ -137,7 +138,7 @@ mod tests {
                         source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                         elements: vec![TemplateElement::String {
                             value: "hello.txt".to_string(),
-                            encoded: "hello.txt".to_string(),
+                            source: "hello.txt".to_source(),
                         }],
                     },
                     space1: whitespace(),
@@ -163,7 +164,7 @@ mod tests {
 
     #[test]
     pub fn test_file_value_content_type() {
-        let variables = HashMap::default();
+        let variables = VariableSet::default();
         assert_eq!(
             file_value_content_type(
                 &FileValue {
@@ -173,7 +174,7 @@ mod tests {
                         source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                         elements: vec![TemplateElement::String {
                             value: "hello.txt".to_string(),
-                            encoded: "hello.txt".to_string()
+                            source: "hello.txt".to_source()
                         }],
                     },
                     space1: whitespace(),
@@ -195,7 +196,7 @@ mod tests {
                         source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                         elements: vec![TemplateElement::String {
                             value: "hello.html".to_string(),
-                            encoded: "hello.html".to_string()
+                            source: "hello.html".to_source()
                         }],
                     },
                     space1: whitespace(),
@@ -217,7 +218,7 @@ mod tests {
                         source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                         elements: vec![TemplateElement::String {
                             value: "hello.txt".to_string(),
-                            encoded: "hello.txt".to_string()
+                            source: "hello.txt".to_source()
                         }],
                     },
                     space1: whitespace(),
@@ -239,7 +240,7 @@ mod tests {
                         source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                         elements: vec![TemplateElement::String {
                             value: "hello".to_string(),
-                            encoded: "hello".to_string()
+                            source: "hello".to_source()
                         }],
                     },
                     space1: whitespace(),

@@ -14,9 +14,11 @@
 <span class="line"><span class="query-type">bytes</span> <span class="predicate-type">endsWith</span> hex,<span class="hex">ab123456</span>;</span>                 <span class="comment"># endsWith</span>
 <span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.book"</span> <span class="predicate-type">exists</span></span>                     <span class="comment"># exists</span>
 <span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.nooks"</span> <span class="predicate-type">includes</span> <span class="string">"Dune"</span></span>           <span class="comment"># includes</span>
+<span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.nooks"</span> <span class="predicate-type">contains</span> <span class="string">"Dune"</span></span>           <span class="comment"># contains</span>
 <span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.succeeded"</span> <span class="predicate-type">isBoolean</span></span>             <span class="comment"># isBoolean</span>
 <span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.books"</span> <span class="predicate-type">isCollection</span></span>              <span class="comment"># isCollection</span>
-<span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.publication_date"</span> <span class="predicate-type">isDate</span></span>         <span class="comment"># isDate</span>
+<span class="line"><span class="query-type">certificate</span> <span class="string">"Expire-Date"</span> <span class="predicate-type">isDate</span></span>             <span class="comment"># isDate</span>
+<span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.publication_date"</span> <span class="predicate-type">isIsoDate</span></span>      <span class="comment"># isIsoDate</span>
 <span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.movies"</span> <span class="predicate-type">isEmpty</span></span>                  <span class="comment"># isEmpty</span>
 <span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.height"</span> <span class="predicate-type">isFloat</span></span>                  <span class="comment"># isFloat</span>
 <span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.count"</span> <span class="predicate-type">isInteger</span></span>                 <span class="comment"># isInteger</span>
@@ -25,4 +27,5 @@
 <span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.release"</span> <span class="predicate-type">matches</span> <span class="regex">/\d{4}/</span></span>         <span class="comment"># matches</span>
 <span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.movie"</span> <span class="predicate-type">startsWith</span> <span class="string">"The"</span></span>          <span class="comment"># startsWith</span>
 <span class="line"><span class="query-type">bytes</span> <span class="predicate-type">startsWith</span> hex,<span class="hex">efbbbf</span>;</span>                 <span class="comment"># startsWith</span>
+<span class="line"><span class="query-type">jsonpath</span> <span class="string">"$.count"</span> <span class="predicate-type">isNumber</span></span>                  <span class="comment"># isNumber</span>
 </span></span></code></pre>

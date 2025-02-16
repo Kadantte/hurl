@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2024 Orange
+ * Copyright (C) 2025 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,55 +15,53 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-
 use chrono::NaiveDateTime;
-
 use hurl_core::ast::{SourceInfo, Template};
 
 use crate::runner::template::eval_template;
-use crate::runner::{Error, RunnerError, Value};
+use crate::runner::{RunnerError, RunnerErrorKind, Value, VariableSet};
 
+/// Converts a string to a date given a specification `format`.
+/// See <https://docs.rs/chrono/latest/chrono/format/strftime/index.html>
 pub fn eval_to_date(
     value: &Value,
-    fmt: &Template,
-    variables: &HashMap<String, Value>,
+    format: &Template,
+    variables: &VariableSet,
     source_info: SourceInfo,
     assert: bool,
-) -> Result<Option<Value>, Error> {
-    let fmt = eval_template(fmt, variables)?;
+) -> Result<Option<Value>, RunnerError> {
+    let format = eval_template(format, variables)?;
 
     match value {
-        Value::String(v) => match NaiveDateTime::parse_from_str(v, fmt.as_str()) {
+        Value::String(v) => match NaiveDateTime::parse_from_str(v, format.as_str()) {
             Ok(v) => Ok(Some(Value::Date(
                 v.and_local_timezone(chrono::Utc).unwrap(),
             ))),
             Err(_) => {
-                let inner = RunnerError::FilterInvalidInput(value.display());
-                Err(Error::new(source_info, inner, assert))
+                let kind = RunnerErrorKind::FilterInvalidInput(value.repr());
+                Err(RunnerError::new(source_info, kind, assert))
             }
         },
         v => {
-            let inner = RunnerError::FilterInvalidInput(v.display());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.repr());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
+    use chrono::{DateTime, NaiveDate, Utc};
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo, Template, TemplateElement, Whitespace};
+    use hurl_core::reader::Pos;
+    use hurl_core::typing::ToSource;
 
     use crate::runner::filter::eval::eval_filter;
-    use crate::runner::Value;
-    use chrono::{DateTime, NaiveDate, Utc};
-    use hurl_core::ast::{
-        Filter, FilterValue, Pos, SourceInfo, Template, TemplateElement, Whitespace,
-    };
-    use std::collections::HashMap;
+    use crate::runner::{Value, VariableSet};
 
     #[test]
-    pub fn eval_filter_to_date() {
-        let variables = HashMap::new();
+    fn eval_filter_to_date() {
+        let variables = VariableSet::new();
 
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
@@ -72,7 +70,7 @@ pub mod tests {
                     delimiter: Some('"'),
                     elements: vec![TemplateElement::String {
                         value: "%Y %b %d %H:%M:%S%.3f %z".to_string(),
-                        encoded: "%Y %b %d %H:%M:%S%.3f %z".to_string(),
+                        source: "%Y %b %d %H:%M:%S%.3f %z".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                 },
@@ -107,7 +105,7 @@ pub mod tests {
                     delimiter: Some('"'),
                     elements: vec![TemplateElement::String {
                         value: "%a, %d %b %Y %H:%M:%S GMT".to_string(),
-                        encoded: "%a, %d %b %Y %H:%M:%S GMT".to_string(),
+                        source: "%a, %d %b %Y %H:%M:%S GMT".to_source(),
                     }],
                     source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
                 },
